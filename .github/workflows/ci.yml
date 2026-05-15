@@ -1,0 +1,64 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel an in-progress run of the same ref when a newer push lands.
+# `github.ref` distinguishes push-to-branch from PR refs, so a feature
+# branch with an open PR runs both independently.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Surface backtraces on test failures.
+  RUST_BACKTRACE: short
+
+jobs:
+  rust:
+    name: build + lint + test (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # `rust-toolchain.toml` at the repo root pins the channel + the
+      # rustfmt / clippy components. `rustup show` installs the pinned
+      # toolchain (and its components) on first invocation.
+      - name: Install pinned toolchain
+        run: |
+          rustup show
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo registry + target/
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Bump the cache prefix when you want to invalidate everything
+          # without changing a workflow file (e.g., after a toolchain
+          # bump that ABI-broke artefacts).
+          prefix-key: v1
+          shared-key: ${{ runner.os }}-rust
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --release --all-targets --no-deps -- -D warnings
+
+      - name: cargo test (unit)
+        run: cargo test --release --lib
+
+      - name: cargo build --release
+        run: cargo build --release
+
+      - name: integration smoke test
+        # `integration_smoke` is `#[ignore]`'d by default so quick local
+        # `cargo test` stays fast; CI opts in explicitly. The test spawns
+        # the built binary on `test_data/smoke/sequences.fasta` and
+        # checks the verdicts byte-for-byte.
+        run: cargo test --release --test integration_smoke -- --ignored
