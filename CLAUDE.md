@@ -17,14 +17,24 @@ That runs kite → features → RF → Platt → 4-verdict logic + k-recovery.
 ```
 src/                  Rust crate (lib + bin)
 config/classifier.toml   ← model thresholds, Platt coefs, baked into binary
-models/               Random-forest JSON dumps (loaded at runtime, ~22 MB)
+models/               Random-forest JSON dumps (baked into binary via include_bytes!)
 tools/training/       R training pipeline + model exporter
 tools/features/       Python reference feature extractors
 ground_truth/         params.tsv + simulator helpers; sequences are regenerated
 test_data/smoke/      87 KB synthetic fixture for build verification
 examples/             validate_rf — diff Rust vs. an R reference TSV
+conda/kitehor/        conda recipe (meta.yaml; built by .github/workflows/conda-release.yml)
+.github/workflows/    ci.yml, release.yml, conda-release.yml
+docs/                 project docs — see docs/ci-status.md for the CI/release plan
 docs/archive/         (gitignored) historical design docs
 ```
+
+## Project docs
+
+All non-README, non-CLAUDE documentation lives in `docs/`. Start with
+[`docs/ci-status.md`](docs/ci-status.md) for the CI/CD plan, locked
+decisions, and the release runbook. Add new topic docs as
+`docs/<topic>.md` siblings; do not scatter markdown at the repo root.
 
 ## Workflow
 
