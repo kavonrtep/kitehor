@@ -12,10 +12,10 @@
 //!   rescale; existing `periodogram.rs::compute_kite_background` already
 //!   uses this approximation).
 //! - For each local maximum:
-//!     score   = peak / (L − position − k + 1)
-//!     score2  = score · log2(position),  then sum-normalised
-//!     filter: position < L/2; score2_norm > 0.001; peak > background
-//!     fallback when no peak passes peak>bg: pick which.max(peak/bg)
+//!   - score   = peak / (L − position − k + 1)
+//!   - score2  = score · log2(position),  then sum-normalised
+//!   - filter: position < L/2; score2_norm > 0.001; peak > background
+//!   - fallback when no peak passes peak>bg: pick which.max(peak/bg)
 //! - Top-1: `which.max(score)` after the filter.
 //! - Top-3: peaks sorted by score desc.
 
@@ -68,8 +68,7 @@ pub struct KiteResult {
     pub background: Option<Vec<f64>>,
 }
 
-pub fn analyze(record: &ArrayRecord, cfg: &KiteConfig,
-               dump_profile: bool) -> KiteResult {
+pub fn analyze(record: &ArrayRecord, cfg: &KiteConfig, dump_profile: bool) -> KiteResult {
     let l = record.length;
     let k = cfg.k;
     if l < k + 2 {
@@ -87,12 +86,15 @@ pub fn analyze(record: &ArrayRecord, cfg: &KiteConfig,
     // (kite.R's smooth.spline picks a similar effective bandwidth via
     // cross-validation, not the L/1000 sigma initially considered).
     let bg_sigma = cfg.bg_smoothing_sigma.unwrap_or(10.0);
-    let background = compute_background(
-        &record.seq, &record.id, k, l, cfg.n_bg_replicates, bg_sigma,
-    );
+    let background =
+        compute_background(&record.seq, &record.id, k, l, cfg.n_bg_replicates, bg_sigma);
     let peaks = find_peaks_with_score(
-        &profile, &background, l, k,
-        cfg.score2_threshold, cfg.min_peak_distance,
+        &profile,
+        &background,
+        l,
+        k,
+        cfg.score2_threshold,
+        cfg.min_peak_distance,
     );
     KiteResult {
         array_id: record.id.clone(),
@@ -145,8 +147,12 @@ fn compute_neighbor_profile(seq: &[u8], k: usize, l: usize) -> Vec<f64> {
 ///   3. smooth the envelope with a wide gaussian (approx. smooth.spline)
 ///   4. rescale: `multiple = max(env/smoothed)[0..L/2]`, multiply
 fn compute_background(
-    seq: &[u8], id: &str, k: usize, l: usize,
-    n_replicates: usize, bg_sigma: f64,
+    seq: &[u8],
+    id: &str,
+    k: usize,
+    l: usize,
+    n_replicates: usize,
+    bg_sigma: f64,
 ) -> Vec<f64> {
     let max_d = l + 1;
     if l < k || n_replicates == 0 {
@@ -157,10 +163,22 @@ fn compute_background(
     let mut n_acgt: u64 = 0;
     for &b in seq.iter() {
         match b {
-            b'A' => { counts[0] += 1; n_acgt += 1; }
-            b'C' => { counts[1] += 1; n_acgt += 1; }
-            b'G' => { counts[2] += 1; n_acgt += 1; }
-            b'T' => { counts[3] += 1; n_acgt += 1; }
+            b'A' => {
+                counts[0] += 1;
+                n_acgt += 1;
+            }
+            b'C' => {
+                counts[1] += 1;
+                n_acgt += 1;
+            }
+            b'G' => {
+                counts[2] += 1;
+                n_acgt += 1;
+            }
+            b'T' => {
+                counts[3] += 1;
+                n_acgt += 1;
+            }
             _ => {}
         }
     }
@@ -188,9 +206,7 @@ fn compute_background(
     let mut envelope = vec![0f64; max_d];
     let mut buf: Vec<u8> = vec![0; l];
     for j in 0..n_replicates {
-        let mut state = seed_base.wrapping_add(
-            0x9E37_79B9_7F4A_7C15u64.wrapping_mul(j as u64 + 1)
-        );
+        let mut state = seed_base.wrapping_add(0x9E37_79B9_7F4A_7C15u64.wrapping_mul(j as u64 + 1));
         if state == 0 {
             state = 1;
         }
@@ -247,7 +263,7 @@ fn gaussian_smooth(hist: &[f64], sigma: f64) -> Vec<f64> {
     }
     let n = hist.len();
     let mut out = vec![0.0f64; n];
-    for i in 0..n {
+    for (i, slot) in out.iter_mut().enumerate() {
         let mut acc = 0.0;
         for (ki, kv) in kernel.iter().enumerate() {
             let off = ki as isize - radius;
@@ -256,7 +272,7 @@ fn gaussian_smooth(hist: &[f64], sigma: f64) -> Vec<f64> {
                 acc += hist[j as usize] * kv;
             }
         }
-        out[i] = acc;
+        *slot = acc;
     }
     out
 }
@@ -266,8 +282,12 @@ fn gaussian_smooth(hist: &[f64], sigma: f64) -> Vec<f64> {
 /// kite.R, filtered by score2 threshold + `position < L/2` + peak > bg
 /// (with the kite.R fallback when none pass).
 fn find_peaks_with_score(
-    profile: &[f64], background: &[f64], l: usize, k: usize,
-    score2_threshold: f64, min_peak_distance: usize,
+    profile: &[f64],
+    background: &[f64],
+    l: usize,
+    k: usize,
+    score2_threshold: f64,
+    min_peak_distance: usize,
 ) -> Vec<KitePeak> {
     // Find strict local maxima: i where profile[i-1] < profile[i] > profile[i+1]
     // (kite.R uses sign(diff(x)) "+-" pattern). Min peak distance enforced
@@ -285,7 +305,7 @@ fn find_peaks_with_score(
         let mut kept: Vec<(usize, f64)> = Vec::new();
         for (pos, h) in raw.drain(..) {
             if !kept.iter().any(|(p, _)| {
-                let dd = if pos > *p { pos - *p } else { *p - pos };
+                let dd = pos.abs_diff(*p);
                 dd > 0 && dd < min_peak_distance
             }) {
                 kept.push((pos, h));
@@ -294,9 +314,7 @@ fn find_peaks_with_score(
         raw = kept;
     }
     // Score per kite.R.
-    let denom = |pos: usize| -> f64 {
-        (l as f64 - pos as f64 - k as f64 + 1.0).max(1.0)
-    };
+    let denom = |pos: usize| -> f64 { (l as f64 - pos as f64 - k as f64 + 1.0).max(1.0) };
     let mut peaks: Vec<KitePeak> = raw
         .into_iter()
         .filter(|(pos, _)| *pos < l / 2 && *pos >= 1)
@@ -346,19 +364,17 @@ fn find_peaks_with_score(
     // Sort by score desc (kite.R: which.max(score) for top-1; sorted by
     // score desc for top-3).
     peaks.sort_by(|a, b| {
-        b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     peaks
 }
 
 /// Convenience wrapper for parallel processing over a record set. Drops
 /// any per-record dump-profile data; use `analyze` directly when needed.
-pub fn analyze_records(records: &[ArrayRecord], cfg: &KiteConfig)
-    -> Vec<KiteResult> {
-    records
-        .par_iter()
-        .map(|r| analyze(r, cfg, false))
-        .collect()
+pub fn analyze_records(records: &[ArrayRecord], cfg: &KiteConfig) -> Vec<KiteResult> {
+    records.par_iter().map(|r| analyze(r, cfg, false)).collect()
 }
 
 #[cfg(test)]
@@ -389,7 +405,10 @@ mod tests {
             state ^= state >> 7;
             state ^= state << 17;
             let nt = match state & 3 {
-                0 => b'A', 1 => b'C', 2 => b'G', _ => b'T',
+                0 => b'A',
+                1 => b'C',
+                2 => b'G',
+                _ => b'T',
             };
             monomer.push(nt);
         }
@@ -417,7 +436,10 @@ mod tests {
             state ^= state >> 7;
             state ^= state << 17;
             let nt = match state & 3 {
-                0 => b'A', 1 => b'C', 2 => b'G', _ => b'T',
+                0 => b'A',
+                1 => b'C',
+                2 => b'G',
+                _ => b'T',
             };
             seq.push(nt);
         }
@@ -455,7 +477,9 @@ mod tests {
         let expected = 1234.0 / denom;
         assert!(
             (p.score - expected).abs() < 1e-9,
-            "score {} != expected {}", p.score, expected
+            "score {} != expected {}",
+            p.score,
+            expected
         );
     }
 }

@@ -155,14 +155,11 @@ pub fn parse_params(path: &Path) -> Result<Vec<GridRow>> {
         .map(|s| s.to_string())
         .collect();
     let idx = |name: &str| -> Result<usize> {
-        headers
-            .iter()
-            .position(|h| h == name)
-            .ok_or_else(|| {
-                crate::errors::HordetectError::InvalidParam(format!(
-                    "params.tsv missing column `{name}`"
-                ))
-            })
+        headers.iter().position(|h| h == name).ok_or_else(|| {
+            crate::errors::HordetectError::InvalidParam(format!(
+                "params.tsv missing column `{name}`"
+            ))
+        })
     };
     let i_case = idx("case_id")?;
     let i_ml = idx("monomer_len")?;
@@ -224,15 +221,14 @@ pub fn parse_params(path: &Path) -> Result<Vec<GridRow>> {
             continue;
         }
         let seed_override = i_seed.and_then(|i| {
-            rec.get(i)
-                .and_then(|s| {
-                    let t = s.trim();
-                    if t.is_empty() {
-                        None
-                    } else {
-                        t.parse::<u64>().ok()
-                    }
-                })
+            rec.get(i).and_then(|s| {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    t.parse::<u64>().ok()
+                }
+            })
         });
         rows.push(GridRow {
             case_id,
@@ -268,14 +264,11 @@ const TRUTH_HEADER: &str =
      submono_k\tseed\tarray_length\tn_monomers\t\
      mean_intra_block_id\tmean_homologous_id\tmean_cross_position_id\thor_signal";
 
-const MONOMERS_HEADER: &str =
-    "case_id\tmonomer_idx\tblock_idx\tfounder_idx\tstart\tend\tlength";
+const MONOMERS_HEADER: &str = "case_id\tmonomer_idx\tblock_idx\tfounder_idx\tstart\tend\tlength";
 
-const EVENTS_HEADER: &str =
-    "case_id\tevent_order\tscope\tsource_idx\ttarget_idx";
+const EVENTS_HEADER: &str = "case_id\tevent_order\tscope\tsource_idx\ttarget_idx";
 
-const ALTERNATIVES_HEADER: &str =
-    "case_id\trank\ttile\tmultiplicity\tfounder\tkind";
+const ALTERNATIVES_HEADER: &str = "case_id\trank\ttile\tmultiplicity\tfounder\tkind";
 
 fn fmt_f64(v: f64) -> String {
     if v.is_nan() {
@@ -286,7 +279,9 @@ fn fmt_f64(v: f64) -> String {
 }
 
 fn simulate_one(row: &GridRow, master_seed: u64) -> Result<CaseOutput> {
-    let seed = row.seed_override.unwrap_or_else(|| derive_seed(master_seed, &row.case_id));
+    let seed = row
+        .seed_override
+        .unwrap_or_else(|| derive_seed(master_seed, &row.case_id));
     let params = SimulateParams {
         monomer_len: row.monomer_len,
         hor_order: row.hor_order,
@@ -377,8 +372,7 @@ fn simulate_one(row: &GridRow, master_seed: u64) -> Result<CaseOutput> {
 /// Run the full grid: parse params.tsv, simulate all cases in parallel,
 /// write the five output files in `outdir`.
 pub fn run_grid(params_path: &Path, outdir: &Path, master_seed: u64) -> anyhow::Result<()> {
-    std::fs::create_dir_all(outdir)
-        .with_context(|| format!("creating outdir {outdir:?}"))?;
+    std::fs::create_dir_all(outdir).with_context(|| format!("creating outdir {outdir:?}"))?;
     let rows = parse_params(params_path)
         .map_err(|e| anyhow::anyhow!("{e}"))
         .with_context(|| format!("reading {params_path:?}"))?;
@@ -407,7 +401,7 @@ pub fn run_grid(params_path: &Path, outdir: &Path, master_seed: u64) -> anyhow::
 
     let mut n_ok = 0usize;
     let mut n_err = 0usize;
-    for (row, out) in rows.iter().zip(outputs.into_iter()) {
+    for (row, out) in rows.iter().zip(outputs) {
         match out {
             Ok(o) => {
                 fasta_f.write_all(o.fasta_record.as_bytes())?;
@@ -423,9 +417,7 @@ pub fn run_grid(params_path: &Path, outdir: &Path, master_seed: u64) -> anyhow::
             }
         }
     }
-    eprintln!(
-        "simulate-grid: wrote {n_ok} cases ({n_err} errors) to {outdir:?}"
-    );
+    eprintln!("simulate-grid: wrote {n_ok} cases ({n_err} errors) to {outdir:?}");
     Ok(())
 }
 
@@ -437,11 +429,17 @@ mod tests {
     fn alternatives_primary_only_for_submono_k_1() {
         let row = GridRow {
             case_id: "x".into(),
-            monomer_len: 200, hor_order: 3, n_blocks: 10,
-            sub_rate_intra: 0.0, sub_rate_inter: 0.0,
-            indel_rate_intra: 0.0, indel_rate_inter: 0.0,
-            block_conversions: 0, monomer_conversions: 0,
-            submono_k: 1, seed_override: None,
+            monomer_len: 200,
+            hor_order: 3,
+            n_blocks: 10,
+            sub_rate_intra: 0.0,
+            sub_rate_inter: 0.0,
+            indel_rate_intra: 0.0,
+            indel_rate_inter: 0.0,
+            block_conversions: 0,
+            monomer_conversions: 0,
+            submono_k: 1,
+            seed_override: None,
         };
         let alts = alternatives_for(&row);
         assert_eq!(alts.len(), 1);
@@ -457,11 +455,17 @@ mod tests {
         // sub_len = 50.
         let row = GridRow {
             case_id: "x".into(),
-            monomer_len: 200, hor_order: 1, n_blocks: 10,
-            sub_rate_intra: 0.0, sub_rate_inter: 0.0,
-            indel_rate_intra: 0.0, indel_rate_inter: 0.0,
-            block_conversions: 0, monomer_conversions: 0,
-            submono_k: 4, seed_override: None,
+            monomer_len: 200,
+            hor_order: 1,
+            n_blocks: 10,
+            sub_rate_intra: 0.0,
+            sub_rate_inter: 0.0,
+            indel_rate_intra: 0.0,
+            indel_rate_inter: 0.0,
+            block_conversions: 0,
+            monomer_conversions: 0,
+            submono_k: 4,
+            seed_override: None,
         };
         let alts = alternatives_for(&row);
         assert_eq!(alts.len(), 3);
@@ -482,11 +486,17 @@ mod tests {
         // sub_len = 53.
         let row = GridRow {
             case_id: "h".into(),
-            monomer_len: 212, hor_order: 3, n_blocks: 54,
-            sub_rate_intra: 0.0, sub_rate_inter: 0.0,
-            indel_rate_intra: 0.0, indel_rate_inter: 0.0,
-            block_conversions: 0, monomer_conversions: 0,
-            submono_k: 4, seed_override: None,
+            monomer_len: 212,
+            hor_order: 3,
+            n_blocks: 54,
+            sub_rate_intra: 0.0,
+            sub_rate_inter: 0.0,
+            indel_rate_intra: 0.0,
+            indel_rate_inter: 0.0,
+            block_conversions: 0,
+            monomer_conversions: 0,
+            submono_k: 4,
+            seed_override: None,
         };
         let alts = alternatives_for(&row);
         assert_eq!(alts.len(), 3);

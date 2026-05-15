@@ -166,9 +166,9 @@ struct PeakRef {
 pub struct FamilyFeatures {
     pub size_best: usize,
     pub tile_founder_ratio: f64,
-    pub tile_period: usize,   // 0 = no tile
+    pub tile_period: usize, // 0 = no tile
     pub tile_jitter: usize,
-    pub founder_d: usize,     // 0 = no family
+    pub founder_d: usize, // 0 = no family
     pub tile_d: usize,
 }
 
@@ -214,14 +214,13 @@ pub fn family_features(peaks_by_score: &[(usize, f64)]) -> FamilyFeatures {
 
     let peaks: Vec<PeakRef> = peaks_by_score
         .iter()
-        .map(|&(p, s)| PeakRef { period: p, score: s })
+        .map(|&(p, s)| PeakRef {
+            period: p,
+            score: s,
+        })
         .collect();
     let top1_score = peaks[0].score;
-    let top_k_periods: Vec<usize> = peaks
-        .iter()
-        .take(require_top_k)
-        .map(|p| p.period)
-        .collect();
+    let top_k_periods: Vec<usize> = peaks.iter().take(require_top_k).map(|p| p.period).collect();
 
     for cand in &peaks {
         let m_f = cand.period;
@@ -301,11 +300,7 @@ pub fn build_features(record: &ArrayRecord, kite: &KiteResult) -> FeatureRow {
 
     // Peaks already come from kite::analyze sorted by score desc. Pull
     // top 10 periods and top 3 scores.
-    let peaks: Vec<(usize, f64)> = kite
-        .peaks
-        .iter()
-        .map(|p| (p.period, p.score))
-        .collect();
+    let peaks: Vec<(usize, f64)> = kite.peaks.iter().map(|p| (p.period, p.score)).collect();
 
     let s = |i: usize| peaks.get(i).map(|p| p.1).unwrap_or(0.0);
     let d = |i: usize| peaks.get(i).map(|p| p.0).unwrap_or(0);
@@ -323,8 +318,16 @@ pub fn build_features(record: &ArrayRecord, kite: &KiteResult) -> FeatureRow {
     } else {
         0.0
     };
-    let d2_over_d1 = if d1 > 0 && d2 > 0 { d2 as f64 / d1 as f64 } else { 0.0 };
-    let d3_over_d1 = if d1 > 0 && d3 > 0 { d3 as f64 / d1 as f64 } else { 0.0 };
+    let d2_over_d1 = if d1 > 0 && d2 > 0 {
+        d2 as f64 / d1 as f64
+    } else {
+        0.0
+    };
+    let d3_over_d1 = if d1 > 0 && d3 > 0 {
+        d3 as f64 / d1 as f64
+    } else {
+        0.0
+    };
     let nz: Vec<f64> = [d1, d2, d3]
         .iter()
         .filter(|&&x| x > 0)
@@ -400,7 +403,7 @@ mod tests {
         assert!(dk > 0.0 && dk < 0.011);
         assert!((ent - 0.0).abs() < 1e-12);
         assert!((sng - 0.0).abs() < 1e-12); // 1 singleton out of 1 distinct = wait
-        // Actually the all-A case has 1 distinct, count = 95, no singletons.
+                                            // Actually the all-A case has 1 distinct, count = 95, no singletons.
     }
 
     #[test]
@@ -428,13 +431,7 @@ mod tests {
     fn family_features_real_hor() {
         // Founder = 178, tile at 888 (k=5), plus harmonic 356 (k=2),
         // 534 (k=3), 712 (k=4). Family of 5.
-        let peaks = vec![
-            (178, 1.0),
-            (888, 0.4),
-            (356, 0.2),
-            (534, 0.15),
-            (712, 0.1),
-        ];
+        let peaks = vec![(178, 1.0), (888, 0.4), (356, 0.2), (534, 0.15), (712, 0.1)];
         let f = family_features(&peaks);
         assert_eq!(f.size_best, 5);
         assert_eq!(f.founder_d, 178);

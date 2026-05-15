@@ -34,8 +34,7 @@ fn parse_f64(s: &str) -> Option<f64> {
 }
 
 fn read_tsv(path: &str) -> (Vec<String>, Vec<Vec<String>>) {
-    let txt = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read tsv {path:?}: {e}"));
+    let txt = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read tsv {path:?}: {e}"));
     let mut lines = txt.lines();
     let header: Vec<String> = lines
         .next()
@@ -51,12 +50,11 @@ fn read_tsv(path: &str) -> (Vec<String>, Vec<Vec<String>>) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let features_path = parse_arg(&args, "--features", None)
-        .expect("--features <path> is required");
-    let reference_path = parse_arg(&args, "--reference", None)
-        .expect("--reference <path> is required");
-    let model_path =
-        parse_arg(&args, "--model", Some("models/hor_score.rftrees.json")).unwrap();
+    let features_path =
+        parse_arg(&args, "--features", None).expect("--features <path> is required");
+    let reference_path =
+        parse_arg(&args, "--reference", None).expect("--reference <path> is required");
+    let model_path = parse_arg(&args, "--model", Some("models/hor_score.rftrees.json")).unwrap();
     let config_path = parse_arg(&args, "--config", None);
 
     let cfg = match config_path.as_deref() {

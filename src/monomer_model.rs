@@ -98,11 +98,7 @@ pub fn score_candidate(
             continue;
         }
         let sim = mean_adjacent_similarity(&blocks, cfg.max_pairs_sampled);
-        if best
-            .as_ref()
-            .map(|(_, b, _)| sim > *b)
-            .unwrap_or(true)
-        {
+        if best.as_ref().map(|(_, b, _)| sim > *b).unwrap_or(true) {
             best = Some((offset, sim, blocks));
         }
     }
@@ -248,7 +244,7 @@ impl<'a> Iterator for CanonicalKmers<'a> {
                     }
                 };
                 fwd = (fwd << 2) | f;
-                rc = (rc >> 2) | ((3 ^ f as u64) << (2 * (self.k - 1)));
+                rc = (rc >> 2) | ((3 ^ f) << (2 * (self.k - 1)));
             }
             if !ok {
                 continue;

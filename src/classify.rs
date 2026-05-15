@@ -150,18 +150,18 @@ pub fn classify(
                     cfg.recovery.tol_rel,
                 );
 
-                if matched_a.is_some()
-                    && cand_founder_a >= cfg.recovery.founder_min_bp
+                if let Some(matched) =
+                    matched_a.filter(|_| cand_founder_a >= cfg.recovery.founder_min_bp)
                 {
-                    let founder_bp = matched_a.unwrap() as usize;
+                    let founder_bp = matched as usize;
                     row.family_founder_d = founder_bp;
                     row.family_tile_d = d1;
                     founder = Some(founder_bp);
                     tile = Some(d1);
                     multiplicity = Some(((d1 as f64 / founder_bp as f64).round() as usize).max(1));
                     recovered = true;
-                } else if matched_b.is_some() && cand_tile_b > d1 as i64 {
-                    let tile_bp = matched_b.unwrap() as usize;
+                } else if let Some(matched) = matched_b.filter(|_| cand_tile_b > d1 as i64) {
+                    let tile_bp = matched as usize;
                     row.family_founder_d = d1;
                     row.family_tile_d = tile_bp;
                     founder = Some(d1);

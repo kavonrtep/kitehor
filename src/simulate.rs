@@ -133,7 +133,12 @@ pub struct ConversionEvent {
 pub fn simulate(
     case_id: &str,
     params: &SimulateParams,
-) -> Result<(ArrayRecord, SimulateTruth, Vec<MonomerInfo>, Vec<ConversionEvent>)> {
+) -> Result<(
+    ArrayRecord,
+    SimulateTruth,
+    Vec<MonomerInfo>,
+    Vec<ConversionEvent>,
+)> {
     if params.monomer_len == 0 || params.hor_order == 0 || params.n_blocks == 0 {
         return Err(crate::errors::HordetectError::InvalidParam(
             "monomer_len, hor_order, n_blocks must all be > 0".into(),
@@ -179,8 +184,8 @@ pub fn simulate(
     let mut monomer_lattice: Vec<(usize, usize)> =
         Vec::with_capacity(params.n_blocks * params.hor_order);
     for b in 0..params.n_blocks {
-        for f in 0..params.hor_order {
-            let seq = rng.mutate(&founders[f], params.sub_rate_inter, params.indel_rate_inter);
+        for (f, founder) in founders.iter().enumerate().take(params.hor_order) {
+            let seq = rng.mutate(founder, params.sub_rate_inter, params.indel_rate_inter);
             monomer_seqs.push(seq);
             monomer_lattice.push((b, f));
         }
@@ -447,11 +452,7 @@ impl Xorshift64 {
     }
     /// Random reservoir-style sample of `k` items from `pairs`. Order
     /// of the output is not preserved (we shuffle in place).
-    fn sample_indices(
-        &mut self,
-        pairs: &[(usize, usize)],
-        k: usize,
-    ) -> Vec<(usize, usize)> {
+    fn sample_indices(&mut self, pairs: &[(usize, usize)], k: usize) -> Vec<(usize, usize)> {
         let n = pairs.len();
         if k >= n {
             return pairs.to_vec();
@@ -468,11 +469,11 @@ impl Xorshift64 {
 
 fn alt_base(b: u8, r: u64) -> u8 {
     let alts: &[u8] = match b {
-        b'A' | b'a' => &[b'C', b'G', b'T'],
-        b'C' | b'c' => &[b'A', b'G', b'T'],
-        b'G' | b'g' => &[b'A', b'C', b'T'],
-        b'T' | b't' => &[b'A', b'C', b'G'],
-        _ => &[b'A', b'C', b'G'],
+        b'A' | b'a' => b"CGT",
+        b'C' | b'c' => b"AGT",
+        b'G' | b'g' => b"ACT",
+        b'T' | b't' => b"ACG",
+        _ => b"ACG",
     };
     alts[(r as usize) % 3]
 }
@@ -521,7 +522,10 @@ mod tests {
         let f0 = &arr.seq[0..200];
         let f1 = &arr.seq[200..400];
         let diff = f0.iter().zip(f1.iter()).filter(|(a, b)| a != b).count();
-        assert!(diff > 10 && diff < 40, "expected ~10% divergence, got {diff}/200");
+        assert!(
+            diff > 10 && diff < 40,
+            "expected ~10% divergence, got {diff}/200"
+        );
         // Same founder 0 in block 2 should still equal f0 (no inter).
         let f0_block2 = &arr.seq[800..1000];
         assert_eq!(f0, f0_block2);
@@ -567,7 +571,10 @@ mod tests {
         let diff = c0.iter().zip(c1.iter()).filter(|(a, b)| a != b).count();
         // Each copy diverged from the founder by ~10% independently.
         // Expected pairwise diff ~ 2*0.10*(1-1/4) ≈ 15%.
-        assert!(diff > 10 && diff < 60, "expected pairwise diff 10-60%, got {diff}/200");
+        assert!(
+            diff > 10 && diff < 60,
+            "expected pairwise diff 10-60%, got {diff}/200"
+        );
     }
 
     #[test]
@@ -646,7 +653,10 @@ mod tests {
         // Monomer lengths vary.
         let lengths: Vec<usize> = monomers.iter().map(|m| m.end - m.start).collect();
         let unique: std::collections::HashSet<_> = lengths.iter().collect();
-        assert!(unique.len() > 1, "expected variable monomer lengths under indels");
+        assert!(
+            unique.len() > 1,
+            "expected variable monomer lengths under indels"
+        );
     }
 
     #[test]
@@ -683,5 +693,4 @@ mod tests {
         };
         assert!(simulate("x", &params).is_err());
     }
-
 }

@@ -16,7 +16,11 @@ use std::process::Command;
 fn binary_path() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     p.push("target");
-    p.push(if cfg!(debug_assertions) { "debug" } else { "release" });
+    p.push(if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    });
     p.push("kitehor");
     p
 }
@@ -70,10 +74,8 @@ fn smoke_classifier_verdicts_match_truth() {
     let rows = parse_tsv(&out);
     assert_eq!(rows.len(), 3, "expected 3 records, got {}", rows.len());
 
-    let by_id: HashMap<String, &HashMap<String, String>> = rows
-        .iter()
-        .map(|r| (r["case_id"].clone(), r))
-        .collect();
+    let by_id: HashMap<String, &HashMap<String, String>> =
+        rows.iter().map(|r| (r["case_id"].clone(), r)).collect();
 
     let tandem = by_id.get("tandem_pure").expect("tandem_pure missing");
     assert_eq!(tandem["verdict"], "tandem", "tandem_pure verdict mismatch");

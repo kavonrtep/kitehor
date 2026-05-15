@@ -1,0 +1,10 @@
+# Pin a known-good stable Rust for reproducible builds on dev machines
+# and in GitHub Actions. The conda recipe uses the rust compiler shipped
+# by conda-forge's `compiler('rust')` and ignores this file.
+#
+# Bump on a deliberate cadence; do not silently track the latest stable.
+
+[toolchain]
+channel = "1.95"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

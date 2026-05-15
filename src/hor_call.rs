@@ -4,11 +4,11 @@
 //! one of:
 //!
 //! - `Hor`        — peaks form an integer-multiple family at a founder.
-//!                  Outputs (founder, tile, multiplicity).
+//!   Outputs (founder, tile, multiplicity).
 //! - `Tandem`     — single dominant periodicity, no HOR structure.
 //! - `Unresolved` — peaks present but no clean classification
-//!                  (variable-length tandem, scattered peaks, or
-//!                  near-tied peaks with no family).
+//!   (variable-length tandem, scattered peaks, or
+//!   near-tied peaks with no family).
 //! - `NoSignal`   — kite produced no peaks above the noise envelope.
 //!
 //! Pure classification — does not re-detect periodicities. See
@@ -139,9 +139,15 @@ pub fn classify(kite: &KiteResult, cfg: &HorCallConfig) -> HorCallResult {
     let total_score: f64 = peaks.iter().map(|p| p.score).sum();
 
     // §2c — fit an HOR family.
-    let (best, family_score_best, family_size_best,
-         best_tile_k, best_tile_period,
-         best_tile_score, best_founder_score) = find_best_family(peaks, cfg);
+    let (
+        best,
+        family_score_best,
+        family_size_best,
+        best_tile_k,
+        best_tile_period,
+        best_tile_score,
+        best_founder_score,
+    ) = find_best_family(peaks, cfg);
 
     // §2b — jitter detector.
     let jitter = compute_jitter(peaks, cfg);
@@ -154,8 +160,7 @@ pub fn classify(kite: &KiteResult, cfg: &HorCallConfig) -> HorCallResult {
             0.0
         };
         if family_size_best >= cfg.min_family_size
-            && (total_score == 0.0
-                || family_score_best / total_score >= cfg.min_family_share)
+            && (total_score == 0.0 || family_score_best / total_score >= cfg.min_family_share)
             && best_tile_score > 0.0
             && tile_founder_ratio >= cfg.min_tile_founder_ratio
         {
@@ -179,8 +184,13 @@ pub fn classify(kite: &KiteResult, cfg: &HorCallConfig) -> HorCallResult {
                     reason: format!(
                         "unresolved:variable_length_tandem:tile_jitter={}/around_tile={}@±{:.0}%;\
                          family_fit_would_say:founder={},k={},tile={};peaks={{{}}}",
-                        tile_jitter, tile, cfg.jitter_tol * 100.0,
-                        m_f, mult, tile, fam_str,
+                        tile_jitter,
+                        tile,
+                        cfg.jitter_tol * 100.0,
+                        m_f,
+                        mult,
+                        tile,
+                        fam_str,
                     ),
                 };
             }
@@ -292,7 +302,9 @@ fn find_best_family(
     let top1_score = peaks[0].score;
     let mut ordered: Vec<&crate::kite::KitePeak> = peaks.iter().collect();
     ordered.sort_by(|a, b| {
-        b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     let n_top = cfg.require_top_k_in_family.min(peaks.len());
     let top_k: Vec<usize> = ordered.iter().take(n_top).map(|p| p.period).collect();
@@ -303,9 +315,7 @@ fn find_best_family(
             continue;
         }
         // Pre-filter on founder score.
-        if top1_score > 0.0
-            && p.score < cfg.min_founder_top1_share * top1_score
-        {
+        if top1_score > 0.0 && p.score < cfg.min_founder_top1_share * top1_score {
             continue;
         }
         let (fam_score, fam_size, best_tile_k, best_tile_period, best_tile_score) =
@@ -314,15 +324,20 @@ fn find_best_family(
             continue;
         }
         // Top-K-in-family check.
-        let all_top_in = top_k.iter().all(|tp| {
-            best_multiplicity(*tp, m_f, cfg).is_some()
-        });
+        let all_top_in = top_k
+            .iter()
+            .all(|tp| best_multiplicity(*tp, m_f, cfg).is_some());
         if !all_top_in {
             continue;
         }
         return (
-            Some(m_f), fam_score, fam_size, best_tile_k, best_tile_period,
-            best_tile_score, p.score,
+            Some(m_f),
+            fam_score,
+            fam_size,
+            best_tile_k,
+            best_tile_period,
+            best_tile_score,
+            p.score,
         );
     }
     (None, 0.0, 0, 0, 0, 0.0, 0.0)
@@ -360,9 +375,7 @@ fn family_metrics(
 
 /// Round `p / m_f` to the nearest integer in `[1, qmax]`, return Some(k)
 /// if `|p − k·m_f|` is within `tol_bp` or `tol_rel · (k·m_f)`. Else None.
-fn best_multiplicity(p: usize, m_f: usize, cfg: &HorCallConfig)
-    -> Option<usize>
-{
+fn best_multiplicity(p: usize, m_f: usize, cfg: &HorCallConfig) -> Option<usize> {
     if m_f == 0 {
         return None;
     }
@@ -371,15 +384,16 @@ fn best_multiplicity(p: usize, m_f: usize, cfg: &HorCallConfig)
         return None;
     }
     let expected = k * m_f;
-    let diff = if p > expected { p - expected } else { expected - p };
-    let tol = (cfg.tol_bp.max(((cfg.tol_rel * expected as f64) as usize)));
-    if diff <= tol { Some(k) } else { None }
+    let diff = p.abs_diff(expected);
+    let tol = cfg.tol_bp.max((cfg.tol_rel * expected as f64) as usize);
+    if diff <= tol {
+        Some(k)
+    } else {
+        None
+    }
 }
 
-fn compute_jitter(
-    peaks: &[crate::kite::KitePeak],
-    cfg: &HorCallConfig,
-) -> usize {
+fn compute_jitter(peaks: &[crate::kite::KitePeak], cfg: &HorCallConfig) -> usize {
     if peaks.is_empty() {
         return 0;
     }
@@ -389,11 +403,7 @@ fn compute_jitter(
 }
 
 /// Count peaks whose period is within `±tol × center` of `center`.
-fn peaks_within_band(
-    peaks: &[crate::kite::KitePeak],
-    center: usize,
-    tol: f64,
-) -> usize {
+fn peaks_within_band(peaks: &[crate::kite::KitePeak], center: usize, tol: f64) -> usize {
     let band = tol * center as f64;
     peaks
         .iter()
@@ -404,11 +414,7 @@ fn peaks_within_band(
         .count()
 }
 
-fn describe_family(
-    peaks: &[crate::kite::KitePeak],
-    m_f: usize,
-    cfg: &HorCallConfig,
-) -> String {
+fn describe_family(peaks: &[crate::kite::KitePeak], m_f: usize, cfg: &HorCallConfig) -> String {
     let mut parts = Vec::new();
     for p in peaks {
         if let Some(k) = best_multiplicity(p.period, m_f, cfg) {

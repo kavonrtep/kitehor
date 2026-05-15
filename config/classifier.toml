@@ -1,10 +1,13 @@
-# hordetect classifier configuration.
+# kitehor classifier configuration.
 #
 # Defaults match the calibrated R prototype (predict_verdict.R + Platt
 # scaling from fit_platt.R), as of 2026-05-14.
 #
-# Override at runtime with `hordetect kite-periodicity --classify
-# --classifier-config <path.toml>`.
+# Override at runtime with `kitehor kite-periodicity --classify
+# --classifier-config <path.toml>`. The model artefacts themselves are
+# compiled into the binary (`classifier::BAKED_HOR_MODEL` /
+# `classifier::BAKED_K_MODEL`); pass `--hor-model <path>` / `--k-model
+# <path>` to swap a custom model in.
 
 # Verdict thresholds applied to the Platt-CALIBRATED HOR score.
 #   score >= t_high            -> hor
@@ -44,9 +47,3 @@ founder_min_bp   = 15   # reject recovered founder periods below this
 # pipeline does not need this except for reporting).
 [training_meta]
 detectable_thr = 0.10   # hor_signal >= 0.10 -> y = 1
-
-# Model artifacts. Paths are relative to the binary's working directory
-# unless absolute. Override with --hor-model / --k-model on the CLI.
-[models]
-hor_score = "models/hor_score.rftrees.json"
-k_pred    = "models/k_pred.rftrees.json"

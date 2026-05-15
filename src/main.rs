@@ -2,9 +2,9 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use kitehor::cli::{Cli, Command, KitePeriodicityArgs, SimulateArgs, SimulateGridArgs};
-use kitehor::classifier::{ClassifierConfig, RandomForest};
+use kitehor::classifier::{ClassifierConfig, RandomForest, BAKED_HOR_MODEL, BAKED_K_MODEL};
 use kitehor::classify::{classify as run_classify, Verdict};
+use kitehor::cli::{Cli, Command, KitePeriodicityArgs, SimulateArgs, SimulateGridArgs};
 use kitehor::features::{build_features, FeatureRow};
 use kitehor::hor_call::{classify as hor_classify, HorCallConfig};
 use kitehor::io::{load_fasta, LoadQc, LoadStatus};
@@ -105,8 +105,8 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
             if let (Some(profile), Some(bg)) = (&r.profile, &r.background) {
                 let mut p = dir.clone();
                 p.push(format!("{}.kite.tsv", r.array_id));
-                let mut fh = std::fs::File::create(&p)
-                    .with_context(|| format!("creating {:?}", &p))?;
+                let mut fh =
+                    std::fs::File::create(&p).with_context(|| format!("creating {:?}", &p))?;
                 writeln!(fh, "d\tH\tbg")?;
                 let n = profile.len().min(bg.len());
                 for d in 0..n {
@@ -125,23 +125,37 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
             Some(p) => ClassifierConfig::load(p)?,
             None => ClassifierConfig::default_baked()?,
         };
-        let hor_model_path = args
-            .hor_model
-            .clone()
-            .unwrap_or_else(|| std::path::PathBuf::from(&cls_cfg.models.hor_score));
-        let k_model_path = args
-            .k_model
-            .clone()
-            .unwrap_or_else(|| std::path::PathBuf::from(&cls_cfg.models.k_pred));
-        let hor_model = RandomForest::load_json(&hor_model_path)
-            .with_context(|| format!("loading HOR-score model {:?}", hor_model_path))?;
-        let k_model = RandomForest::load_json(&k_model_path).ok();
-        if k_model.is_none() {
-            warn!(
-                "k-predictor model {:?} not loaded — k-recovery disabled",
-                k_model_path
-            );
-        }
+        // Baked-in defaults; CLI flags override with a user-supplied
+        // JSON file (typically a freshly-trained ranger forest exported
+        // via `tools/training/export_ranger.R`).
+        let hor_model = match &args.hor_model {
+            Some(p) => RandomForest::load_json(p)
+                .with_context(|| format!("loading HOR-score model {:?}", p))?,
+            None => RandomForest::load_json_bytes(BAKED_HOR_MODEL)
+                .context("loading baked-in HOR-score model")?,
+        };
+        let k_model = match &args.k_model {
+            Some(p) => match RandomForest::load_json(p) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    warn!(
+                        "k-predictor model {:?} not loaded ({}) — k-recovery disabled",
+                        p, e
+                    );
+                    None
+                }
+            },
+            None => match RandomForest::load_json_bytes(BAKED_K_MODEL) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    warn!(
+                        "baked-in k-predictor model failed to load ({}) — k-recovery disabled",
+                        e
+                    );
+                    None
+                }
+            },
+        };
         let platt = cls_cfg.platt();
 
         let mut features: Vec<FeatureRow> = ok_records
@@ -205,8 +219,8 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
             std::fs::create_dir_all(parent)?;
         }
     }
-    let mut out = std::fs::File::create(&args.out)
-        .with_context(|| format!("creating {:?}", &args.out))?;
+    let mut out =
+        std::fs::File::create(&args.out).with_context(|| format!("creating {:?}", &args.out))?;
     let mut header = String::from(
         "case_id\tarray_length\tn_peaks_kept\
          \tmonomer_size\tscore\
@@ -262,7 +276,10 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
                 .multiplicity
                 .map(|x| x.to_string())
                 .unwrap_or_else(|| na.into());
-            let t = hc.tile_bp.map(|x| x.to_string()).unwrap_or_else(|| na.into());
+            let t = hc
+                .tile_bp
+                .map(|x| x.to_string())
+                .unwrap_or_else(|| na.into());
             line.push_str(&format!(
                 "\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{}\t{}",
                 hc.verdict.as_str(),
@@ -277,9 +294,7 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
         }
         if classify_enabled {
             let (feat, verd) = &verdicts[idx];
-            let fmt_opt = |o: &Option<usize>| {
-                o.map(|x| x.to_string()).unwrap_or_else(|| na.into())
-            };
+            let fmt_opt = |o: &Option<usize>| o.map(|x| x.to_string()).unwrap_or_else(|| na.into());
             let fmt_h = |v: f64| {
                 if v.is_nan() {
                     na.to_string()
