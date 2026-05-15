@@ -115,6 +115,40 @@ five columns:
 | `tile`          | HOR tile period (bp) |
 | `share`         | `min(s_founder, s_tile) / max(...)`. Diagnostic only, NOT a filter. |
 
+## Supplementary coverage QC (`--coverage`)
+
+Pass `--coverage` together with `--classify` to add nine more columns
+for records called `hor`. Records not called `hor` get `NA`.
+
+For each HOR call the array is split into `floor(L / tile)` tile-length
+windows; the first window is taken as the reference HOR unit and every
+subsequent window is compared to it using **Levenshtein-based identity**
+(`1 - edit_distance / max_len`). The aggregate columns are:
+
+| Column            | Meaning |
+|---|---|
+| `cov_mean`        | mean identity to the first tile |
+| `cov_pass_70/80/90` | fraction of windows with identity ≥ {0.70, 0.80, 0.90} |
+| `cov_first_half`  | mean identity in the first half of windows |
+| `cov_second_half` | mean identity in the second half — large gap flags mosaic arrays |
+| `cov_min` / `cov_max` | worst / best window; `cov_min` flags single-tile dropouts |
+| `cov_n_tiles`     | number of comparison windows |
+
+What the score does and does not catch:
+
+- ✓ **mosaic / partial-array** patterns (first_half vs second_half asymmetry)
+- ✓ **tile dropouts** (`cov_min` outliers)
+- ✓ **wrong-period calls** (`cov_mean` collapses toward 0.25 random)
+- ✗ **founder = sub-period of a longer real monomer** — both produce
+  high tile-aligned identity by construction. Distinguishing this case
+  requires an external constraint such as a minimum-founder-length
+  floor (not yet exposed as a flag).
+
+This is purely supplementary — it does **not** enter the rule's
+HOR/non-HOR decision. Cost: ~ms per record for typical centromeric
+tiles; longer for kb-scale tiles. Empirically: synth seed 201 (1,204
+records, 234 HOR calls) runs in **~8 s on 6 threads**.
+
 ## Provenance
 
 The rule emerged from the 2026-05-15 architectural review after the ML

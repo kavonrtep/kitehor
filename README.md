@@ -94,6 +94,23 @@ trusts kite peak detection (every kite peak has already passed the
 `peak > background` filter) and calls HOR when `d1` is a `k≥2`
 integer multiple of a top-3 kite peak within tolerance.
 
+### Supplementary coverage QC (`--coverage`)
+
+Pass `--coverage` together with `--classify` to add nine columns
+quantifying how well the rule's `tile` period actually tiles the
+array. Levenshtein identity between the first tile and each
+subsequent tile-aligned window:
+
+```bash
+kitehor kite-periodicity input.fasta -o predictions.tsv --classify --coverage
+```
+
+Adds: `cov_mean`, `cov_pass_70`, `cov_pass_80`, `cov_pass_90`,
+`cov_first_half`, `cov_second_half`, `cov_min`, `cov_max`,
+`cov_n_tiles`. Non-HOR rows get NA. Supplementary only — it does not
+enter the HOR decision. See [docs/rule.md](docs/rule.md) for what the
+score does and does not catch.
+
 ### Legacy ML classifier (`--use-ml-classifier`)
 
 A random-forest + Platt-scaled classifier with k-recovery and homology

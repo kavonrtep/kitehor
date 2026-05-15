@@ -166,6 +166,16 @@ pub struct KitePeriodicityArgs {
     #[arg(long, default_value_t = 3)]
     pub rule_top_n: usize,
 
+    /// Supplementary HOR-coverage QC (rule path only). For each HOR
+    /// call, slide a tile-length window across the array with step =
+    /// tile and compute Levenshtein identity vs the first tile. Adds
+    /// columns: `cov_mean`, `cov_pass_70/80/90`, `cov_first_half`,
+    /// `cov_second_half`, `cov_min`, `cov_max`, `cov_n_tiles`. Records
+    /// not called HOR get NA. Adds modest runtime (~ms per record for
+    /// typical tile sizes; longer for kb-scale tiles).
+    #[arg(long)]
+    pub coverage: bool,
+
     /// ML override: classifier config TOML.
     #[arg(long, value_name = "PATH")]
     pub classifier_config: Option<PathBuf>,

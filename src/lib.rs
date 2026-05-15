@@ -20,6 +20,7 @@ pub mod sequence;
 
 pub mod classifier;
 pub mod classify;
+pub mod coverage;
 pub mod features;
 pub mod hor_call;
 pub mod kite;

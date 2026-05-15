@@ -145,6 +145,24 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
         Vec::new()
     };
 
+    // Supplementary HOR-coverage QC. Only runs under the rule path,
+    // only when --coverage is set, only for records the rule called as
+    // HOR. Computed in parallel; non-HOR records get None.
+    let coverage_results: Vec<Option<kitehor::coverage::TileCoverage>> =
+        if classify_enabled && !use_ml && args.coverage {
+            use kitehor::coverage::compute_tile_coverage;
+            ok_records
+                .par_iter()
+                .zip(rule_verdicts.par_iter())
+                .map(|(rec, verdict)| match verdict.tile() {
+                    Some(t) if verdict.as_str() == "hor" => compute_tile_coverage(&rec.seq, t),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
     let ml_verdicts: Vec<(FeatureRow, Verdict)> = if classify_enabled && use_ml {
         let cls_cfg = match &args.classifier_config {
             Some(p) => ClassifierConfig::load(p)?,
@@ -263,6 +281,12 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
     }
     if classify_enabled && !use_ml {
         header.push_str("\tverdict\tfounder\tmultiplicity\ttile\tshare");
+        if args.coverage {
+            header.push_str(
+                "\tcov_mean\tcov_pass_70\tcov_pass_80\tcov_pass_90\
+                 \tcov_first_half\tcov_second_half\tcov_min\tcov_max\tcov_n_tiles",
+            );
+        }
     }
     if classify_enabled && use_ml {
         header.push_str(
@@ -336,6 +360,28 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
                 fmt_opt(rv.tile()),
                 fmt_share(rv.share()),
             ));
+            if args.coverage {
+                match coverage_results.get(idx).and_then(|c| c.as_ref()) {
+                    Some(c) => {
+                        line.push_str(&format!(
+                            "\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{}",
+                            c.mean,
+                            c.pass_70,
+                            c.pass_80,
+                            c.pass_90,
+                            c.first_half,
+                            c.second_half,
+                            c.min,
+                            c.max,
+                            c.n_tiles,
+                        ));
+                    }
+                    None => {
+                        // 9 NA fields
+                        line.push_str("\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA");
+                    }
+                }
+            }
         }
         if classify_enabled && use_ml {
             let (feat, verd) = &ml_verdicts[idx];
