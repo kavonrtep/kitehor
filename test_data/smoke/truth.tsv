@@ -1,0 +1,4 @@
+case_id	monomer_len	hor_order	n_blocks	sub_rate_intra	sub_rate_inter	indel_rate_intra	indel_rate_inter	block_conversions	monomer_conversions	submono_k	seed	array_length	n_monomers	mean_intra_block_id	mean_homologous_id	mean_cross_position_id	hor_signal
+tandem_pure	60	1	300	0.1000	0.0000	0.0000	0.0000	0	0	1	7	18000	300	NA	1.0000	NA	NA
+hor_k3	100	3	80	0.1000	0.0500	0.0000	0.0000	0	0	1	7	24000	240	0.7445	0.9050	0.7445	0.1605
+hor_k5	150	5	60	0.1000	0.0500	0.0000	0.0000	0	0	1	7	45000	300	0.7698	0.9025	0.7593	0.1432

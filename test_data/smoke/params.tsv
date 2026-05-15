@@ -1,0 +1,4 @@
+case_id	monomer_len	hor_order	n_blocks	sub_rate_intra	sub_rate_inter	indel_rate_intra	indel_rate_inter	block_conversions	monomer_conversions	submono_k	seed
+tandem_pure	60	1	300	0.10	0.0	0.0	0.0	0	0	1	7
+hor_k3	100	3	80	0.10	0.05	0.0	0.0	0	0	1	7
+hor_k5	150	5	60	0.10	0.05	0.0	0.0	0	0	1	7

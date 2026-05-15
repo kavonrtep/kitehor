@@ -1,0 +1,18 @@
+# Rust build artefacts
+/target/
+Cargo.lock.bak
+*.rs.bk
+
+# Local outputs
+/out/
+/tmp/
+*.log
+
+# Historical / internal docs (kept around locally, not published)
+/docs/archive/
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+*.swp

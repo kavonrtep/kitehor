@@ -1,0 +1,276 @@
+//! CLI argument parsing (clap derive).
+
+use clap::{Args, Parser, Subcommand};
+use std::path::PathBuf;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "kitehor",
+    version,
+    about = "Kite-first probabilistic HOR detector"
+)]
+pub struct Cli {
+    /// Verbosity level: pass once for INFO, twice for DEBUG, thrice for TRACE.
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    pub verbose: u8,
+
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Kite periodicity scan + (optional) probabilistic HOR classifier.
+    /// Primary entry point of the tool.
+    KitePeriodicity(KitePeriodicityArgs),
+    /// Generate one synthetic HOR / tandem-repeat array (for testing
+    /// and training-set construction).
+    Simulate(SimulateArgs),
+    /// Generate a grid of synthetic arrays from a params TSV.
+    /// Writes sequences.fasta, truth.tsv, monomers.tsv, events.tsv,
+    /// and alternatives.tsv to the output directory.
+    SimulateGrid(SimulateGridArgs),
+}
+
+// ---------------------------------------------------------------------------
+// Shared QC flags
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args, Clone)]
+pub struct QcOpts {
+    /// Minimum array length (bp); shorter records are flagged.
+    #[arg(long, default_value_t = 5_000)]
+    pub min_array_bp: usize,
+
+    /// Maximum fraction of Ns; records above are flagged.
+    #[arg(long, default_value_t = 0.20)]
+    pub max_n_fraction: f64,
+}
+
+impl Default for QcOpts {
+    fn default() -> Self {
+        Self {
+            min_array_bp: 5_000,
+            max_n_fraction: 0.20,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// kite-periodicity
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct KitePeriodicityArgs {
+    /// Input FASTA file(s). For TideCluster-style dimers, pre-trim to
+    /// the first half externally.
+    pub fasta: Vec<PathBuf>,
+
+    /// Primary output TSV.
+    #[arg(short, long)]
+    pub out: PathBuf,
+
+    /// k-mer size for the kite histogram. kite.R default = 6.
+    #[arg(short = 'k', long, default_value_t = 6)]
+    pub kmer_size: usize,
+
+    /// Number of composition-matched random sequences for the noise
+    /// envelope. kite.R default = 10.
+    #[arg(short = 'N', long = "bg-replicates", default_value_t = 10)]
+    pub bg_replicates: usize,
+
+    /// Score2 threshold (kite.R's `threshold` argument).
+    #[arg(long, default_value_t = 0.001)]
+    pub score2_threshold: f64,
+
+    /// Minimum peak separation (bp).
+    #[arg(long, default_value_t = 1)]
+    pub min_peak_distance: usize,
+
+    /// Override the gaussian smoothing sigma used to approximate
+    /// `smooth.spline` on the random-background envelope. Default = 10.
+    #[arg(long)]
+    pub bg_sigma: Option<f64>,
+
+    /// Optional: write per-record `H[d]` + `bg[d]` profiles to this
+    /// directory as `<case_id>.kite.tsv` (large output; off by default).
+    #[arg(long)]
+    pub dump_profile: Option<PathBuf>,
+
+    /// Optional: long-format peaks TSV (one row per kept peak per
+    /// record). Defaults to `<out>.peaks.tsv` when omitted.
+    #[arg(long)]
+    pub out_peaks: Option<PathBuf>,
+
+    // -- Rule-based HOR layer (legacy, hor_call.rs) --------------------
+    /// Disable the rule-based HOR layer (kite-peaks-only output).
+    #[arg(long)]
+    pub no_hor_call: bool,
+
+    /// Rule layer: max multiplicity explored.
+    #[arg(long, default_value_t = 30)]
+    pub hor_qmax: usize,
+
+    /// Rule layer: minimum peaks in a family for the HOR verdict.
+    #[arg(long, default_value_t = 3)]
+    pub hor_min_family_size: usize,
+
+    /// Rule layer: family_score / total_score floor for the HOR verdict.
+    #[arg(long, default_value_t = 0.50)]
+    pub hor_min_family_share: f64,
+
+    /// Rule layer: top-peak / second-peak score ratio for the tandem
+    /// verdict.
+    #[arg(long, default_value_t = 3.0)]
+    pub hor_dominance: f64,
+
+    /// Rule layer: relative band (± × top1 period) for the jitter
+    /// detector that flags variable-length tandems as `unresolved`.
+    #[arg(long, default_value_t = 0.15)]
+    pub hor_jitter_tol: f64,
+
+    /// Rule layer: # of top peaks within the jitter band that triggers
+    /// `unresolved`.
+    #[arg(long, default_value_t = 4)]
+    pub hor_jitter_thr: usize,
+
+    /// Rule layer: minimum `tile_score / founder_score` for the HOR
+    /// verdict.
+    #[arg(long, default_value_t = 0.15)]
+    pub hor_min_tile_founder_ratio: f64,
+
+    // -- Probabilistic classifier (RF + Platt + verdict) ---------------
+    /// Apply the trained kite-first probabilistic classifier. Adds
+    /// per-record columns `hor_score`, `hor_score_raw`, `verdict`,
+    /// `founder`, `multiplicity`, `tile`, `k_pred`, `recovered`,
+    /// `h_d1`, `h_founder`. Requires the random-forest JSON artifacts
+    /// shipped under `models/`.
+    #[arg(long)]
+    pub classify: bool,
+
+    /// Override the classifier config (TOML). Default: baked-in
+    /// `config/classifier.toml`.
+    #[arg(long, value_name = "PATH")]
+    pub classifier_config: Option<PathBuf>,
+
+    /// Override the HOR-score RF model JSON path. Default: from config.
+    #[arg(long, value_name = "PATH")]
+    pub hor_model: Option<PathBuf>,
+
+    /// Override the k-predictor RF model JSON path. Default: from config.
+    #[arg(long, value_name = "PATH")]
+    pub k_model: Option<PathBuf>,
+
+    /// Skip the homology features (`h_d1`, `h_founder`) — the model
+    /// will fall back to training-set imputation medians. Useful when
+    /// probe homology is too slow on very long arrays. Mildly degrades
+    /// scores.
+    #[arg(long)]
+    pub no_homology: bool,
+
+    #[command(flatten)]
+    pub qc: QcOpts,
+
+    /// Number of rayon worker threads (0 = auto).
+    #[arg(long, default_value_t = 0)]
+    pub threads: usize,
+}
+
+// ---------------------------------------------------------------------------
+// simulate / simulate-grid
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct SimulateArgs {
+    /// Base monomer length (bp).
+    #[arg(long, default_value_t = 171)]
+    pub monomer_size: usize,
+
+    /// HOR multiplicity (1 = plain tandem repeat).
+    #[arg(long, default_value_t = 12)]
+    pub multiplicity: usize,
+
+    /// Number of HOR copies in the array.
+    #[arg(long, default_value_t = 100)]
+    pub copies: usize,
+
+    /// Per-base substitution rate within each monomer copy.
+    #[arg(long, default_value_t = 0.05)]
+    pub sub_rate_intra: f64,
+
+    /// Per-base substitution rate between HOR-position founders.
+    #[arg(long, default_value_t = 0.03)]
+    pub sub_rate_inter: f64,
+
+    /// Sub-motif tiling factor (1 = no internal sub-period).
+    #[arg(long, default_value_t = 1)]
+    pub submono_k: usize,
+
+    /// Seed for the simulator's PRNG. Any change → different sequence.
+    #[arg(long, default_value_t = 0)]
+    pub seed: u64,
+
+    /// Record id placed in the FASTA header.
+    #[arg(long, default_value = "sim_0000")]
+    pub case_id: String,
+
+    /// Output FASTA path. Truth metadata is written next to it with
+    /// `.truth.tsv` appended.
+    #[arg(short, long)]
+    pub out: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct SimulateGridArgs {
+    /// Parameter TSV. Columns: case_id, monomer_len, hor_order, n_blocks,
+    /// sub_rate_intra, sub_rate_inter, indel_rate_intra, indel_rate_inter,
+    /// block_conversions, monomer_conversions, submono_k, seed.
+    /// Same schema as `ground_truth/params.tsv`.
+    #[arg(short, long)]
+    pub params: PathBuf,
+
+    /// Output directory. Writes sequences.fasta, truth.tsv,
+    /// monomers.tsv, events.tsv, alternatives.tsv here.
+    #[arg(short, long)]
+    pub outdir: PathBuf,
+
+    /// Master seed used when a row's `seed` column is blank. The
+    /// per-case seed is then derived as FNV-1a hash of "master:case_id".
+    #[arg(long, default_value_t = 42)]
+    pub seed: u64,
+
+    /// Number of rayon worker threads (0 = let rayon decide).
+    #[arg(long, default_value_t = 0)]
+    pub threads: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_help_renders() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn classify_parses() {
+        let argv = [
+            "kitehor",
+            "kite-periodicity",
+            "x.fa",
+            "-o",
+            "out.tsv",
+            "--classify",
+        ];
+        let cli = Cli::try_parse_from(argv).unwrap();
+        match cli.command {
+            Command::KitePeriodicity(args) => {
+                assert!(args.classify);
+                assert_eq!(args.fasta.len(), 1);
+            }
+            _ => panic!("expected KitePeriodicity"),
+        }
+    }
+}

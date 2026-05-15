@@ -1,0 +1,52 @@
+# hordetect classifier configuration.
+#
+# Defaults match the calibrated R prototype (predict_verdict.R + Platt
+# scaling from fit_platt.R), as of 2026-05-14.
+#
+# Override at runtime with `hordetect kite-periodicity --classify
+# --classifier-config <path.toml>`.
+
+# Verdict thresholds applied to the Platt-CALIBRATED HOR score.
+#   score >= t_high            -> hor
+#   t_low <= score < t_high    -> unresolved
+#   score <  t_low             -> tandem
+#   s1 == 0 or d1 == 0         -> no_signal (overrides all)
+[thresholds]
+t_low  = 0.15
+t_high = 0.71
+
+# Platt scaling: P(y=1 | s) = sigmoid(intercept + slope * logit(s_raw)).
+# Coefficients from `glm(y ~ logit_score, family=binomial)` on OOB scores.
+[platt]
+intercept = 0.16844
+slope     = 1.56331
+# Small epsilon used to clip the raw score before taking the logit, to
+# avoid +/-inf at the boundaries (must match fit_platt.R).
+clip_eps = 1.0e-4
+
+# Imputation medians (from the training set, used at inference for NAs
+# in the homology features that probe-periods may fail to compute).
+[imputation]
+h_d1      = 0.7559
+h_founder = 0.71915
+
+# k-recovery: when the RF predicts HOR but kite finds no clean integer
+# family, ask the k-predictor for an integer multiplicity and check whether
+# d1 * k_pred or d1 / k_pred matches one of the next top-K kite peaks.
+[recovery]
+top_k_candidates = 5    # search d2..d_{top_k_candidates+1}
+tol_bp           = 5    # absolute tolerance (bp)
+tol_rel          = 0.02 # relative tolerance
+k_min            = 2    # round-to-int floor on the k-predictor output
+founder_min_bp   = 15   # reject recovered founder periods below this
+
+# Ground-truth metric used at training time (informational; the inference
+# pipeline does not need this except for reporting).
+[training_meta]
+detectable_thr = 0.10   # hor_signal >= 0.10 -> y = 1
+
+# Model artifacts. Paths are relative to the binary's working directory
+# unless absolute. Override with --hor-model / --k-model on the CLI.
+[models]
+hor_score = "models/hor_score.rftrees.json"
+k_pred    = "models/k_pred.rftrees.json"
