@@ -1,0 +1,105 @@
+name: conda-release
+
+# Same trigger pattern as release.yml so a single tag fires both
+# pipelines independently. Build outputs go to anaconda.org/kavonrtep.
+on:
+  push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+*']
+
+concurrency:
+  group: conda-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-upload:
+    name: build + upload to anaconda.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert tag matches Cargo.toml
+        run: |
+          V=$(grep -m1 -E '^version[[:space:]]*=' Cargo.toml \
+              | sed -E 's/.*"([^"]+)".*/\1/')
+          T="${GITHUB_REF_NAME}"
+          if [ "$V" != "$T" ]; then
+            echo "::error::Cargo.toml version ($V) != tag ($T)"
+            exit 1
+          fi
+          echo "tag matches Cargo.toml: $V"
+
+      - name: Assert ANACONDA_API_TOKEN is set
+        env:
+          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
+        run: |
+          if [ -z "${ANACONDA_API_TOKEN:-}" ]; then
+            echo "::error::ANACONDA_API_TOKEN secret is not set (Settings → Secrets → Actions)"
+            exit 1
+          fi
+
+      - name: Set up miniforge / mamba
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          auto-update-conda: false
+          use-mamba: true
+          activate-environment: release
+          python-version: "3.11"
+          channels: conda-forge,kavonrtep
+          channel-priority: strict
+
+      - name: Install conda-build + anaconda-client
+        # setuptools>=81 removed pkg_resources, which anaconda-client's
+        # binstar_client still imports — pin <81 per upstream workaround
+        # (same pin TideCluster uses).
+        # Use the standalone conda-build CLI rather than `conda
+        # mambabuild` (which depends on boa's plugin registration —
+        # flaky on hosted runners).
+        run: |
+          mamba install -y conda-build anaconda-client "setuptools<81"
+
+      - name: Sync Cargo.toml into recipe dir
+        # meta.yaml reads the version via load_file_regex from a
+        # Cargo.toml that lives INSIDE the recipe dir (because
+        # conda-build copies the recipe to a temp workdir before
+        # rendering; from_recipe_dir=True points at that copy).
+        run: |
+          cp Cargo.toml conda/kitehor/Cargo.toml
+          echo "recipe Cargo.toml head:"
+          head -10 conda/kitehor/Cargo.toml
+
+      - name: Build conda package
+        run: |
+          mkdir -p build_out
+          conda-build -c conda-forge \
+            --output-folder build_out \
+            conda/kitehor
+
+      - name: Upload to anaconda.org
+        env:
+          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
+        run: |
+          FILES=$(ls build_out/linux-64/kitehor-*.conda \
+                     build_out/linux-64/kitehor-*.tar.bz2 2>/dev/null || true)
+          if [ -z "$FILES" ]; then
+            echo "::error::no built package found in build_out/linux-64/"
+            exit 1
+          fi
+          for f in $FILES; do
+            echo "Uploading $f"
+            anaconda -t "$ANACONDA_API_TOKEN" upload \
+              --user kavonrtep --label main "$f"
+          done
+
+      - name: Upload build artefact (for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kitehor-conda-${{ github.ref_name }}
+          path: build_out/linux-64/kitehor-*
+          if-no-files-found: ignore
