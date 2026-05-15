@@ -44,10 +44,10 @@ one pure tandem and two HORs (k=3, k=5). To verify the build:
     -o /tmp/smoke.tsv \
     --classify --no-hor-call
 
-# Expected verdicts (col 12) on a clean build:
+# Expected verdicts under the default (rule) classifier:
 #   tandem_pure    -> tandem
-#   hor_k3         -> hor   (founder=100, k=3, tile=300)
-#   hor_k5         -> hor   (founder=150, k=5, tile=750)
+#   hor_k3         -> hor   (founder=100, k=3, tile=300, share~0.45)
+#   hor_k5         -> hor   (founder=150, k=5, tile=750, share~0.80)
 ```
 
 The fixture itself was produced from `test_data/smoke/params.tsv` via
@@ -66,8 +66,11 @@ it at any time:
 # Periodicity scan only (no classifier).
 kitehor kite-periodicity input.fasta -o periods.tsv
 
-# Periodicity + probabilistic HOR call (the main entry point).
+# Periodicity + HOR call (rule-based, default).
 kitehor kite-periodicity input.fasta -o predictions.tsv --classify
+
+# Periodicity + legacy ML classifier (opt-in).
+kitehor kite-periodicity input.fasta -o predictions.tsv --classify --use-ml-classifier
 
 # Simulate one synthetic array.
 kitehor simulate --monomer-size 171 --multiplicity 12 --copies 100 -o sim.fa
@@ -76,21 +79,31 @@ kitehor simulate --monomer-size 171 --multiplicity 12 --copies 100 -o sim.fa
 kitehor simulate-grid --params ground_truth/params.tsv --outdir out/sim
 ```
 
-When `--classify` is set, the output TSV adds columns:
+### Default `--classify` columns (rule-based)
 
 | Column | Meaning |
 |---|---|
-| `hor_score` | Platt-calibrated HOR probability ∈ [0, 1] |
-| `hor_score_raw` | Uncalibrated random-forest probability |
-| `verdict` | `hor` / `tandem` / `unresolved` / `no_signal` |
-| `founder` | Inferred founder monomer (bp), only for `hor`/`tandem` |
-| `multiplicity` | k (1 for tandem) |
-| `tile` | HOR tile period (bp) |
-| `k_pred` | Integer prediction from the k-regressor (when used) |
-| `recovered` | True if the HOR call came from k-recovery rather than family fit |
-| `h_d1`, `h_founder` | Block-mean homology at d1 and the inferred founder |
+| `verdict`       | `hor` / `tandem` / `unresolved` / `no_signal` |
+| `founder`       | Inferred founder period (bp), only for `hor` |
+| `multiplicity`  | k (1 for tandem) |
+| `tile`          | HOR tile period (bp) |
+| `share`         | `min(s_founder, s_tile) / max(...)` — diagnostic only |
 
-The default thresholds (`t_low = 0.15`, `t_high = 0.71`) live in
+The rule is documented in detail in [docs/rule.md](docs/rule.md). It
+trusts kite peak detection (every kite peak has already passed the
+`peak > background` filter) and calls HOR when `d1` is a `k≥2`
+integer multiple of a top-3 kite peak within tolerance.
+
+### Legacy ML classifier (`--use-ml-classifier`)
+
+A random-forest + Platt-scaled classifier with k-recovery and homology
+features. Output adds: `hor_score`, `hor_score_raw`, `k_pred`,
+`recovered`, `h_d1`, `h_founder`. Useful when working with data drawn
+from the same distribution as the synthetic training set; otherwise
+the rule-based default is more reliable on real centromeric arrays
+(see [docs/rule.md](docs/rule.md) for the empirical comparison).
+
+The legacy thresholds (`t_low = 0.15`, `t_high = 0.71`) live in
 `config/classifier.toml`. Override them or the Platt coefficients with
 `--classifier-config <path.toml>`.
 

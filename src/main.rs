@@ -18,7 +18,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     init_logger(cli.verbose);
     match cli.command {
-        Command::KitePeriodicity(args) => run_kite_periodicity(args),
+        Command::KitePeriodicity(args) => run_kite_periodicity(*args),
         Command::Simulate(args) => run_simulate(args),
         Command::SimulateGrid(args) => run_simulate_grid(args),
     }
@@ -118,16 +118,38 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
         }
     }
 
-    // --- Optional probabilistic classifier (kite-first RF + Platt) ---
+    // --- Optional HOR classification ---
+    //
+    // Default path: rule-based classifier (src/rule.rs). Triggered by
+    // `--classify`. Trusts kite peak filtering and looks for an
+    // integer-multiple relation between d1 and a top-N kite peak.
+    //
+    // Opt-in legacy ML path: `--classify --use-ml-classifier`. Loads
+    // the baked random forests + Platt, runs feature extraction +
+    // homology probing + verdict orchestrator. Same output columns as
+    // earlier kitehor versions.
     let classify_enabled = args.classify;
-    let verdicts: Vec<(FeatureRow, Verdict)> = if classify_enabled {
+    let use_ml = args.use_ml_classifier;
+    let rule_cfg = kitehor::rule::RuleConfig {
+        top_n: args.rule_top_n,
+        qmax: args.rule_qmax,
+        ..kitehor::rule::RuleConfig::default()
+    };
+
+    let rule_verdicts: Vec<kitehor::rule::RuleVerdict> = if classify_enabled && !use_ml {
+        results
+            .iter()
+            .map(|kr| kitehor::rule::classify(kr, &rule_cfg))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let ml_verdicts: Vec<(FeatureRow, Verdict)> = if classify_enabled && use_ml {
         let cls_cfg = match &args.classifier_config {
             Some(p) => ClassifierConfig::load(p)?,
             None => ClassifierConfig::default_baked()?,
         };
-        // Baked-in defaults; CLI flags override with a user-supplied
-        // JSON file (typically a freshly-trained ranger forest exported
-        // via `tools/training/export_ranger.R`).
         let hor_model = match &args.hor_model {
             Some(p) => RandomForest::load_json(p)
                 .with_context(|| format!("loading HOR-score model {:?}", p))?,
@@ -192,7 +214,6 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
                     }
                 }
             }
-            // h_founder defaults to h_d1 when no separate founder probe ran.
             for f in features.iter_mut() {
                 if f.h_founder.is_nan() {
                     f.h_founder = f.h_d1;
@@ -207,11 +228,18 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
                 (f, v)
             })
             .collect();
-        info!("classifier: applied to {} record(s)", verdicts.len());
+        info!("ML classifier: applied to {} record(s)", verdicts.len());
         verdicts
     } else {
         Vec::new()
     };
+
+    if classify_enabled && !use_ml {
+        info!(
+            "rule classifier: applied to {} record(s)",
+            rule_verdicts.len()
+        );
+    }
 
     // Primary TSV.
     if let Some(parent) = args.out.parent() {
@@ -233,7 +261,10 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
              \thor_family_size\thor_family_score\thor_jitter\thor_reason",
         );
     }
-    if classify_enabled {
+    if classify_enabled && !use_ml {
+        header.push_str("\tverdict\tfounder\tmultiplicity\ttile\tshare");
+    }
+    if classify_enabled && use_ml {
         header.push_str(
             "\thor_score\thor_score_raw\tverdict\
              \tfounder\tmultiplicity\ttile\tk_pred\trecovered\
@@ -292,8 +323,22 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
                 hc.reason,
             ));
         }
-        if classify_enabled {
-            let (feat, verd) = &verdicts[idx];
+        if classify_enabled && !use_ml {
+            let rv = rule_verdicts[idx];
+            let fmt_opt = |o: Option<usize>| o.map(|x| x.to_string()).unwrap_or_else(|| na.into());
+            let fmt_share =
+                |s: Option<f64>| s.map(|x| format!("{:.4}", x)).unwrap_or_else(|| na.into());
+            line.push_str(&format!(
+                "\t{}\t{}\t{}\t{}\t{}",
+                rv.as_str(),
+                fmt_opt(rv.founder()),
+                fmt_opt(rv.multiplicity()),
+                fmt_opt(rv.tile()),
+                fmt_share(rv.share()),
+            ));
+        }
+        if classify_enabled && use_ml {
+            let (feat, verd) = &ml_verdicts[idx];
             let fmt_opt = |o: &Option<usize>| o.map(|x| x.to_string()).unwrap_or_else(|| na.into());
             let fmt_h = |v: f64| {
                 if v.is_nan() {

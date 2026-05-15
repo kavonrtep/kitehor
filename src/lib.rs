@@ -24,6 +24,7 @@ pub mod features;
 pub mod hor_call;
 pub mod kite;
 pub mod monomer_model;
+pub mod rule;
 pub mod simulate;
 pub mod simulate_grid;
 

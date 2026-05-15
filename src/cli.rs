@@ -20,9 +20,9 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Kite periodicity scan + (optional) probabilistic HOR classifier.
+    /// Kite periodicity scan + (optional) HOR classifier.
     /// Primary entry point of the tool.
-    KitePeriodicity(KitePeriodicityArgs),
+    KitePeriodicity(Box<KitePeriodicityArgs>),
     /// Generate one synthetic HOR / tandem-repeat array (for testing
     /// and training-set construction).
     Simulate(SimulateArgs),
@@ -139,32 +139,48 @@ pub struct KitePeriodicityArgs {
     #[arg(long, default_value_t = 0.15)]
     pub hor_min_tile_founder_ratio: f64,
 
-    // -- Probabilistic classifier (RF + Platt + verdict) ---------------
-    /// Apply the trained kite-first probabilistic classifier. Adds
-    /// per-record columns `hor_score`, `hor_score_raw`, `verdict`,
-    /// `founder`, `multiplicity`, `tile`, `k_pred`, `recovered`,
-    /// `h_d1`, `h_founder`. Requires the random-forest JSON artifacts
-    /// shipped under `models/`.
+    // -- HOR classification ---------------------------------------
+    /// Apply the HOR classifier. By default this is the rule-based
+    /// classifier (`src/rule.rs`): d1 = k × p_n for some k ∈ [2,
+    /// qmax], with p_n a top-N kite peak. Adds per-record columns
+    /// `verdict`, `founder`, `multiplicity`, `tile`, `share`.
+    /// Pass `--use-ml-classifier` to fall back to the legacy
+    /// probabilistic pipeline.
     #[arg(long)]
     pub classify: bool,
 
-    /// Override the classifier config (TOML). Default: baked-in
-    /// `config/classifier.toml`.
+    /// Use the legacy ML classifier (random forest + Platt + verdict
+    /// logic from earlier kitehor versions) instead of the rule.
+    /// Adds the ML-specific columns: `hor_score`, `hor_score_raw`,
+    /// `k_pred`, `recovered`, `h_d1`, `h_founder`. Requires the
+    /// random-forest JSON artefacts shipped under `models/`.
+    #[arg(long)]
+    pub use_ml_classifier: bool,
+
+    /// Rule layer: maximum HOR multiplicity considered. Default 30.
+    #[arg(long, default_value_t = 30)]
+    pub rule_qmax: usize,
+
+    /// Rule layer: founder candidate must be among the top-N kite
+    /// peaks by score. Default 3 (the user-validated value).
+    #[arg(long, default_value_t = 3)]
+    pub rule_top_n: usize,
+
+    /// ML override: classifier config TOML.
     #[arg(long, value_name = "PATH")]
     pub classifier_config: Option<PathBuf>,
 
-    /// Override the HOR-score RF model JSON path. Default: from config.
+    /// ML override: HOR-score RF model JSON.
     #[arg(long, value_name = "PATH")]
     pub hor_model: Option<PathBuf>,
 
-    /// Override the k-predictor RF model JSON path. Default: from config.
+    /// ML override: k-predictor RF model JSON.
     #[arg(long, value_name = "PATH")]
     pub k_model: Option<PathBuf>,
 
-    /// Skip the homology features (`h_d1`, `h_founder`) — the model
-    /// will fall back to training-set imputation medians. Useful when
-    /// probe homology is too slow on very long arrays. Mildly degrades
-    /// scores.
+    /// ML option: skip the homology probe (`h_d1`, `h_founder`); the
+    /// model falls back to the training-set imputation medians.
+    /// Only has effect under `--use-ml-classifier`.
     #[arg(long)]
     pub no_homology: bool,
 

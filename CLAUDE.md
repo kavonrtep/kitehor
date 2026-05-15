@@ -10,23 +10,37 @@ Sequence-agnostic HOR detector. Workhorse subcommand:
 kitehor kite-periodicity <fasta> -o out.tsv --classify
 ```
 
-That runs kite → features → RF → Platt → 4-verdict logic + k-recovery.
+That runs kite → 4-condition rule (`src/rule.rs`): HOR ⟺ d1 = k×p_n
+for k ∈ [2, 30] with p_n in top-3 by score. See `docs/rule.md` for the
+algorithm and the empirical study that produced it.
+
+The earlier ML pipeline (RF + Platt + k-recovery + homology) is still
+available via `--use-ml-classifier`. It is over-sensitive on real
+centromeric arrays and under-sensitive on real HORs with strong
+inter-position divergence (the training-set distribution doesn't match
+real data) — use only when the input is drawn from a similar
+distribution to the synthetic training corpus.
 
 ## Repo layout shortcut
 
 ```
 src/                  Rust crate (lib + bin)
-config/classifier.toml   ← model thresholds, Platt coefs, baked into binary
-models/               Random-forest JSON dumps (baked into binary via include_bytes!)
-tools/training/       R training pipeline + model exporter
-tools/features/       Python reference feature extractors
+  rule.rs             default HOR classifier (4-condition rule)
+  classifier.rs       legacy ML loader (RF + Platt); used only under --use-ml-classifier
+  classify.rs         legacy ML verdict orchestrator
+config/classifier.toml legacy ML thresholds (only consulted with --use-ml-classifier)
+models/               Legacy RF JSON (baked into binary; loaded only by ML path)
+tools/training/       R training pipeline for the legacy model
+tools/features/       Python reference feature extractors (for ML cross-check)
 ground_truth/         params.tsv + simulator helpers; sequences are regenerated
 test_data/smoke/      87 KB synthetic fixture for build verification
-examples/             validate_rf — diff Rust vs. an R reference TSV
+examples/             validate_rf — legacy ML cross-check vs an R reference TSV
 conda/kitehor/        conda recipe (meta.yaml; built by .github/workflows/conda-release.yml)
 .github/workflows/    ci.yml, release.yml, conda-release.yml
-docs/                 project docs — see docs/ci-status.md for the CI/release plan
-docs/archive/         (gitignored) historical design docs
+docs/                 project docs
+  rule.md             ← the rule classifier, current default
+  ci-status.md        ← CI/release plan + runbook
+  archive/            (gitignored) historical design docs
 ```
 
 ## Project docs
