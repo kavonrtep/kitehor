@@ -10,6 +10,12 @@ Cargo.lock.bak
 
 # v2 simulator: corpus spec is tracked, generated bundles are not
 /ground_truth_v2/out/
+/ground_truth_v2/det_out/
+
+# HTML dashboards: generator (`tools/detect_eval/report.py`) is
+# tracked; the rendered output (~20 MB of PNGs per 1600-case run) is
+# regen'd on demand.
+/docs/reports/*_dashboard/
 
 # Historical / internal docs (kept around locally, not published)
 /docs/archive/

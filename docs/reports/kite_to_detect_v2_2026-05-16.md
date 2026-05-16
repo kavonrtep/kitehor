@@ -189,6 +189,35 @@ both directions and below the M6 ≥ 88 % per-category target.
      (e.g., 0.60 instead of 0.95) when `kite-periodicity` reported
      `n_peaks_kept` ≤ 1.
 
+## Interactive dashboard
+
+For a clickable per-case browser, render the HTML dashboard:
+
+```bash
+python3 tools/detect_eval/report.py \
+    --manifest      ground_truth_v2/manifest.tsv \
+    --kite          /tmp/kite_v2_run/all.kite.tsv \
+    --periods       /tmp/kite_v2_run/all.kite.periods.tsv \
+    --properties-dir /tmp/kite_v2_run/det_out \
+    --truth-root    ground_truth_v2/out \
+    --fasta-dir     /tmp/kite_v2_run/fasta_flat \
+    --out-dir       docs/reports/kite_v2_dashboard \
+    --commit        $(git rev-parse --short HEAD) \
+    --oracle-pct    94.4
+```
+
+Output: ~1.4 MB `index.html` + ~16 MB `assets/line_width/<case>.png`
+(one per case). Open `docs/reports/kite_v2_dashboard/index.html`
+in any browser; the dashboard has filterable case table, confusion
+matrix, per-category bars, kite-verdict stack, and on-row-click
+detail panel with periodogram + line-width raster + side-by-side
+kite / detect / truth rows.
+
+The output directory matches the pattern `docs/reports/*_dashboard/`
+and is gitignored — regen on demand. Render takes ~30 s for 1600
+cases on a 6-core box (PNG generation is the bottleneck; add
+`--skip-png` to iterate on the HTML alone).
+
 ## Reproducibility
 
 | Artefact | Path / value |
@@ -197,6 +226,7 @@ both directions and below the M6 ≥ 88 % per-category target.
 | Corpus | `ground_truth_v2/out/` (regen with `./ground_truth_v2/run_batch.sh`) |
 | Manifest | `ground_truth_v2/manifest.tsv` |
 | Eval harness | `tools/detect_eval/eval.py` |
+| Dashboard generator | `tools/detect_eval/report.py` |
 | Kite scores | hardcoded defaults in `src/emit_periods.rs` |
 | Detector thresholds | `DetectorConfig::default()` in `src/detect/config.rs` |
 | Per-case CSV | `/tmp/kite_v2_run/eval.csv` (regenerate with `--csv-out`) |
