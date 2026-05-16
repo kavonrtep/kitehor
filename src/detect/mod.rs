@@ -60,7 +60,7 @@ pub fn run_one(
     let mut width_features: Vec<WidthFeatures> = Vec::new();
 
     for (arr, pers) in &paired {
-        let (props, mut widths) = run_array_m1(arr, pers, cfg);
+        let (props, mut widths) = run_array_m2(arr, pers, cfg);
         properties.push(props);
         width_features.append(&mut widths);
         // M4 will append segments.
@@ -82,11 +82,10 @@ fn run_array_m0(arr: &ArrayRecord) -> Properties {
     Properties::placeholder(&arr.id, arr.length)
 }
 
-/// M1 per-array work: expand widths, wrap to 2D at each, compute
-/// background-corrected column IC and `fraction_conserved`. Returns
-/// the (still-placeholder) property row plus one `WidthFeatures`
-/// entry per tested width.
-fn run_array_m1(
+/// M2 per-array work: M1 + oriented 4-mer row embeddings and
+/// `R(k)` autocorrelation. Fills `row_lag1_similarity`, `best_lag`,
+/// `best_lag_score` per width.
+fn run_array_m2(
     arr: &ArrayRecord,
     pers: &[PeriodCandidate],
     cfg: &DetectorConfig,
@@ -96,47 +95,36 @@ fn run_array_m1(
     let mut out = Vec::with_capacity(widths.len());
     for w in widths {
         let stats = wrap::wrap_and_ic(&arr.seq, w, &bg, cfg);
-        let row = match stats {
-            Some(s) => WidthFeatures {
-                array_id: arr.id.clone(),
-                width_bp: w,
-                rows: s.n_rows,
-                column_ic: Some(s.mean_column_ic),
-                fraction_conserved_columns: Some(s.fraction_conserved),
-                row_lag1_similarity: None,
-                best_lag: None,
-                best_lag_score: None,
-                phase_separation: None,
-                vertical_edge_rate: None,
-                column_edge_autocorr_k: None,
-                column_edge_autocorr_score: None,
-                mean_shift_bp: None,
-                wobble_amplitude_bp: None,
-                n_phase_shifts: 0,
-                irregularity_score: None,
-                class_hint: ClassHint::UnsupportedWidth, // M4 sets this
-            },
-            None => WidthFeatures {
-                array_id: arr.id.clone(),
-                width_bp: w,
-                rows: 0,
-                column_ic: None,
-                fraction_conserved_columns: None,
-                row_lag1_similarity: None,
-                best_lag: None,
-                best_lag_score: None,
-                phase_separation: None,
-                vertical_edge_rate: None,
-                column_edge_autocorr_k: None,
-                column_edge_autocorr_score: None,
-                mean_shift_bp: None,
-                wobble_amplitude_bp: None,
-                n_phase_shifts: 0,
-                irregularity_score: None,
-                class_hint: ClassHint::UnsupportedWidth,
-            },
+        let (rows, ic, fc) = match &stats {
+            Some(s) => (s.n_rows, Some(s.mean_column_ic), Some(s.fraction_conserved)),
+            None => (0usize, None, None),
         };
-        out.push(row);
+        let (r_lag1, best_lag, best_lag_score) = if stats.is_some() {
+            let embs = embed::embed_rows(&arr.seq, w, cfg);
+            let summary = autocorr::compute(&embs, cfg.max_hor_k);
+            (summary.r_lag1, summary.best_lag, summary.best_lag_score)
+        } else {
+            (None, None, None)
+        };
+        out.push(WidthFeatures {
+            array_id: arr.id.clone(),
+            width_bp: w,
+            rows,
+            column_ic: ic,
+            fraction_conserved_columns: fc,
+            row_lag1_similarity: r_lag1,
+            best_lag,
+            best_lag_score,
+            phase_separation: None,
+            vertical_edge_rate: None,
+            column_edge_autocorr_k: None,
+            column_edge_autocorr_score: None,
+            mean_shift_bp: None,
+            wobble_amplitude_bp: None,
+            n_phase_shifts: 0,
+            irregularity_score: None,
+            class_hint: ClassHint::UnsupportedWidth, // M4 sets this
+        });
     }
     (Properties::placeholder(&arr.id, arr.length), out)
 }
