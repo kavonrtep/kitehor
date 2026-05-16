@@ -413,6 +413,37 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
         );
     }
 
+    // --- Optional v2-detector periods.tsv emission ---
+    //
+    // Bridge from kite output → `kitehor detect --periods`. Source +
+    // score mapping documented in `src/emit_periods.rs`. The ML
+    // classifier path doesn't produce founder/tile in the v2 sense,
+    // so under `--use-ml-classifier` we fall back to raw kite peaks
+    // (the same path as "no classifier ran").
+    if let Some(periods_path) = args.emit_periods.as_ref() {
+        let batches: Vec<Vec<kitehor::emit_periods::PeriodsRow>> = if classify_enabled && !use_ml {
+            results
+                .iter()
+                .zip(rule_verdicts.iter())
+                .map(|(kr, v)| kitehor::emit_periods::build_rows(kr, Some(v)))
+                .collect()
+        } else {
+            results
+                .iter()
+                .map(|kr| kitehor::emit_periods::build_rows(kr, None))
+                .collect()
+        };
+        let n = kitehor::emit_periods::write_tsv(periods_path, &batches)?;
+        let n_arrays_with_rows = batches.iter().filter(|b| !b.is_empty()).count();
+        info!(
+            "emit-periods: wrote {} row(s) for {} of {} array(s) to {:?}",
+            n,
+            n_arrays_with_rows,
+            results.len(),
+            periods_path
+        );
+    }
+
     // Primary TSV.
     if let Some(parent) = args.out.parent() {
         if !parent.as_os_str().is_empty() {

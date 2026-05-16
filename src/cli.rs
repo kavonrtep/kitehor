@@ -123,6 +123,17 @@ pub struct KitePeriodicityArgs {
     #[arg(long)]
     pub out_peaks: Option<PathBuf>,
 
+    /// Optional: emit a v2 `periods.tsv` consumable by
+    /// `kitehor detect --periods`. Score mapping (see
+    /// `src/emit_periods.rs`): with `--classify`, founder → 0.95,
+    /// tile → 0.90, other top-3 peaks → 0.60; ambiguous verdicts
+    /// (`Unresolved`) emit top-3 at 0.50 / 0.40 / 0.30. Without
+    /// `--classify`, raw kite top-3 peaks emit at 0.60. NoSignal
+    /// produces no rows (use `kitehor detect --allow-missing-periods`
+    /// to keep those records in the output).
+    #[arg(long, value_name = "PATH")]
+    pub emit_periods: Option<PathBuf>,
+
     // -- Rule-based HOR layer (legacy, hor_call.rs) --------------------
     /// Disable the rule-based HOR layer (kite-peaks-only output).
     #[arg(long)]
