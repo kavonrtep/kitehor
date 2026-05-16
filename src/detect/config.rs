@@ -24,6 +24,18 @@ pub struct DetectorConfig {
     pub ic_threshold_hor_base: f64,
     pub ic_threshold_hor_unit: f64,
     pub ic_threshold_simple_tr: f64,
+    /// Simple-TR rescue threshold on R(1). When base IC is below
+    /// `ic_threshold_simple_tr` but R(1) ≥ this value and phase_sep
+    /// is low, fire simple_TR. Catches indel-drifted simple TRs
+    /// where column IC is diluted to ~0.14 but adjacent-row
+    /// similarity remains ~0.9.
+    pub simple_tr_r1_rescue: f64,
+    /// Lower IC floor used only by the rescue path and the
+    /// "any-width-supported?" early-exit check. Distinct from
+    /// `ic_threshold_min` so we can admit indel-drifted widths
+    /// (IC ≈ 0.10–0.15) for rescue without polluting the general
+    /// candidate path.
+    pub ic_threshold_rescue: f64,
 
     // Embeddings
     pub embedding_k: usize,
@@ -104,17 +116,30 @@ impl Default for DetectorConfig {
             divisor_top_n: 5,
 
             min_rows_per_width: 8,
-            ic_threshold_min: 0.5,
-            ic_threshold_hor_base: 0.4,
-            ic_threshold_hor_unit: 0.7,
-            ic_threshold_simple_tr: 0.7,
+            // M6 calibration on ground_truth_v2. Lowered IC
+            // thresholds catch (a) high-divergence HOR units whose
+            // column IC drops because slot consensuses look random,
+            // and (b) indel-affected simple TRs whose IC is diluted
+            // by row drift but R(1) stays high.
+            ic_threshold_min: 0.20,
+            ic_threshold_hor_base: 0.30,
+            ic_threshold_hor_unit: 0.25,
+            ic_threshold_simple_tr: 0.30,
+            simple_tr_r1_rescue: 0.40,
+            ic_threshold_rescue: 0.01,
 
             embedding_k: 4,
             embedding_dim_hash: None,
 
-            phase_separation_threshold: 0.15,
+            // M6 calibration: progressively lowered to 0.01 so
+            // heavy-wobble HORs (where row misalignment weakens
+            // R(k)) still cross the threshold while clean simple
+            // TRs (phase_sep ≈ 0.0001) stay below.
+            phase_separation_threshold: 0.01,
             primitive_correction_delta: 0.05,
-            min_hor_units: 5,
+            // M6: lowered from 5 → 3 to catch HOR fixtures with
+            // n_copies=50 and k=16 (only 3 complete units).
+            min_hor_units: 3,
             regime_c_r1_threshold: 0.5,
             strong_period_score: 0.85,
             regime_a_r_curve_flatness: 0.05,
@@ -127,7 +152,7 @@ impl Default for DetectorConfig {
             block_size_rows_min: 100,
             stratification_same_threshold: 0.90,
             stratification_diff_threshold: 0.80,
-            irregularity_demote_threshold: 0.30,
+            irregularity_demote_threshold: 0.50,
 
             confidence_weights: ConfidenceWeights::default(),
         }

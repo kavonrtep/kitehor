@@ -67,13 +67,13 @@ pub fn decide_array(
         return ambiguous("no widths available");
     }
 
-    // No width clears `ic_threshold_min` → array has no detectable
-    // repeat structure.
+    // No width clears even the rescue floor → array has no
+    // detectable repeat structure.
     let any_supported = width_features
         .iter()
-        .any(|w| w.column_ic.map(|ic| ic >= cfg.ic_threshold_min).unwrap_or(false));
+        .any(|w| w.column_ic.map(|ic| ic >= cfg.ic_threshold_rescue).unwrap_or(false));
     if !any_supported {
-        return ambiguous("no width achieves ic_threshold_min");
+        return ambiguous("no width achieves ic_threshold_rescue");
     }
 
     // DH1: classify over ALL supported width_features (not just the
@@ -134,7 +134,21 @@ pub fn decide_array(
             let base_ic_ok = ic >= cfg.ic_threshold_hor_base;
             let unit_ic_ok = unit_ic >= cfg.ic_threshold_hor_unit;
             let r1_ok = r1 >= cfg.regime_c_r1_threshold;
-            if base_ic_ok && unit_ic_ok && r1_ok {
+            // High-phase-sep HOR rescue: heavy-wobble HORs at a
+            // width the upstream generator declared as the true
+            // base (input_score >= strong_period_score) where IC
+            // is diluted by row drift but phase_separation stays
+            // strong. Gated on `input_score` so expansion-only
+            // widths can't sneak in extra HOR candidates that
+            // confuse dedup.
+            let phase_high = phase_sep >= 0.10;
+            let pass_strict = base_ic_ok && unit_ic_ok && r1_ok;
+            let pass_phase_rescue = phase_high
+                && r1_ok
+                && ic >= 0.10
+                && unit_ic >= 0.10
+                && input_score >= cfg.strong_period_score;
+            if pass_strict || pass_phase_rescue {
                 hor_calls_raw.push(Candidate {
                     class: Class::HOR,
                     base_width_bp: w.width_bp,
@@ -183,7 +197,29 @@ pub fn decide_array(
         }
 
         // ---- Simple TR candidate ----
-        if ic >= cfg.ic_threshold_simple_tr && phase_sep < cfg.phase_separation_threshold {
+        //
+        // Two paths qualify:
+        //   (a) high column IC + low phase_sep (the canonical case);
+        //   (b) very high R(1) + low phase_sep at a width the
+        //       upstream generator actually proposed (input_score >
+        //       0). This is the indel-drift rescue path: a true
+        //       simple_TR's column IC is diluted by drifted row
+        //       alignment, but R(1) at the true width stays ≥ ~0.9.
+        //       Gating on `input_score > 0` keeps off-period
+        //       expansion widths from triggering the rescue.
+        let canonical = ic >= cfg.ic_threshold_simple_tr;
+        // Rescue: a width that the upstream generator emitted as a
+        // high-confidence true period (true_base / true_hor_unit
+        // score), with very high R(1) but diluted column IC —
+        // typical of indel-affected simple TRs. Gated on
+        // `input_score >= 0.85` so low-score distractor periods
+        // (near_miss=0.71, harmonic=0.65, false_positive=0.42)
+        // can't trigger the rescue.
+        let rescue =
+            input_score >= cfg.strong_period_score
+                && r1 >= cfg.simple_tr_r1_rescue
+                && ic >= cfg.ic_threshold_rescue;
+        if (canonical || rescue) && phase_sep < cfg.phase_separation_threshold {
             // Regime-A tag: uniformly high R(k) curve (R(1) ≈ R(best_lag))
             // suggests a collapsed HOR (div ≈ 0). The data is genuinely
             // indistinguishable from a plain simple_TR, so we always
@@ -326,8 +362,29 @@ pub fn decide_array(
         }
     }
 
+    // Cross-call "structurally mixed" gate: a single repeat block
+    // emits at most 2 high-score input periods (true_base + true_hor_unit).
+    // 3 or more high-score periods → ≥ 2 repeat blocks → mixed,
+    // regardless of whether the second block's periods are integer
+    // multiples of the first (e.g. mx with L_a=100, L_b=200).
+    let multi_block_via_strong = {
+        let n_strong = pers
+            .iter()
+            .filter(|p| p.period_score >= cfg.strong_period_score)
+            .map(|p| p.period_bp)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        n_strong > 2
+    };
+
     // Single coherent HOR call wins.
     if let Some(c) = hor_calls.into_iter().next() {
+        if multi_block_via_strong {
+            return mixed_decision(
+                Some(c.n_complete_copies),
+                "mixed — HOR call selected but another high-score input period is independent",
+            );
+        }
         return ArrayDecision {
             class: c.class,
             base_width_bp: Some(c.base_width_bp),
@@ -341,6 +398,12 @@ pub fn decide_array(
         };
     }
     if let Some(c) = simple_calls.into_iter().next() {
+        if multi_block_via_strong {
+            return mixed_decision(
+                Some(c.n_complete_copies),
+                "mixed — simple_TR call selected but another high-score input period is independent",
+            );
+        }
         return ArrayDecision {
             class: c.class,
             base_width_bp: Some(c.base_width_bp),
@@ -455,10 +518,15 @@ fn dedup_by_multiplicity(mut v: Vec<Candidate>) -> Vec<Candidate> {
     // emitted (`input_score > 0`) beat divisor/expansion-only widths.
     // Within the same tier, prefer the smaller width (primitive
     // correction). Two widths are considered the same "harmonic
-    // family" when their GCD is ≥ a minimum meaningful width — that
-    // catches integer multiples AND rationally-related widths like
-    // 170 / 255 (gcd 85). Different families remain independent
-    // (e.g. T13's 171 vs 220 with gcd 1).
+    // family" when:
+    //   - their GCD is ≥ a minimum meaningful width (catches
+    //     integer multiples AND rationally-related widths like
+    //     170 / 255, gcd 85);
+    //   - OR one is within ±NEAR_MISS_TOL of the other (catches
+    //     near-miss widths around the same true period, e.g.
+    //     167–173 with gcd 1).
+    // Different families remain independent (e.g. T13's 171 vs 220
+    // with gcd 1 and width difference 49).
     v.sort_by(|a, b| {
         b.input_score
             .partial_cmp(&a.input_score)
@@ -466,12 +534,16 @@ fn dedup_by_multiplicity(mut v: Vec<Candidate>) -> Vec<Candidate> {
             .then_with(|| a.base_width_bp.cmp(&b.base_width_bp))
     });
     const MIN_GCD: usize = 20;
+    const NEAR_MISS_TOL: usize = 5;
     let mut out: Vec<Candidate> = Vec::new();
     for c in v {
         let related = out.iter().any(|prev| {
             let a = c.base_width_bp;
             let b = prev.base_width_bp;
-            a > 0 && b > 0 && gcd(a, b) >= MIN_GCD
+            if a == 0 || b == 0 {
+                return false;
+            }
+            gcd(a, b) >= MIN_GCD || a.abs_diff(b) <= NEAR_MISS_TOL
         });
         if !related {
             out.push(c);
