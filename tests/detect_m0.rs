@@ -90,12 +90,24 @@ structure:
     assert_eq!(segs.lines().count(), 1);
     assert_eq!(segs.lines().next().unwrap().split('\t').count(), 11);
 
-    // width_features.tsv: header only
+    // width_features.tsv: header + one row per tested width (M1).
     let mut p = out_prefix.as_os_str().to_owned();
     p.push(".width_features.tsv");
     let wf = std::fs::read_to_string(std::path::PathBuf::from(p)).unwrap();
-    assert_eq!(wf.lines().count(), 1);
-    assert_eq!(wf.lines().next().unwrap().split('\t').count(), 17);
+    let wf_lines: Vec<&str> = wf.lines().collect();
+    assert!(wf_lines.len() >= 2, "width_features should have header + ≥1 data row");
+    assert_eq!(wf_lines[0].split('\t').count(), 17);
+    let cols: Vec<&str> = wf_lines[1].split('\t').collect();
+    assert_eq!(cols.len(), 17);
+    assert_eq!(cols[0], "arr");
+    // M1: column_IC and fraction_conserved_columns are populated (not NA)
+    // for widths that satisfy min_rows_per_width.
+    let ic = cols[3];
+    let fc = cols[4];
+    assert!(
+        ic != "NA" || fc != "NA",
+        "expected M1 to populate column_IC/fraction_conserved for at least the first width"
+    );
 }
 
 #[test]

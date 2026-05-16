@@ -57,12 +57,13 @@ pub fn run_one(
 
     let mut properties: Vec<Properties> = Vec::with_capacity(paired.len());
     let segments: Vec<Segment> = Vec::new();
-    let width_features: Vec<WidthFeatures> = Vec::new();
+    let mut width_features: Vec<WidthFeatures> = Vec::new();
 
-    for (arr, _pers) in &paired {
-        let p = run_array_m0(arr);
-        properties.push(p);
-        // M1 will populate per-(array, width) rows; M4 will append segments.
+    for (arr, pers) in &paired {
+        let (props, mut widths) = run_array_m1(arr, pers, cfg);
+        properties.push(props);
+        width_features.append(&mut widths);
+        // M4 will append segments.
     }
 
     io::write_properties(out_prefix, &properties)?;
@@ -79,6 +80,65 @@ pub fn run_one(
 /// M0-only per-array work: build a placeholder property row.
 fn run_array_m0(arr: &ArrayRecord) -> Properties {
     Properties::placeholder(&arr.id, arr.length)
+}
+
+/// M1 per-array work: expand widths, wrap to 2D at each, compute
+/// background-corrected column IC and `fraction_conserved`. Returns
+/// the (still-placeholder) property row plus one `WidthFeatures`
+/// entry per tested width.
+fn run_array_m1(
+    arr: &ArrayRecord,
+    pers: &[PeriodCandidate],
+    cfg: &DetectorConfig,
+) -> (Properties, Vec<WidthFeatures>) {
+    let bg = wrap::Background::compute(&arr.seq);
+    let widths = widths::expand(pers, cfg, arr.length);
+    let mut out = Vec::with_capacity(widths.len());
+    for w in widths {
+        let stats = wrap::wrap_and_ic(&arr.seq, w, &bg, cfg);
+        let row = match stats {
+            Some(s) => WidthFeatures {
+                array_id: arr.id.clone(),
+                width_bp: w,
+                rows: s.n_rows,
+                column_ic: Some(s.mean_column_ic),
+                fraction_conserved_columns: Some(s.fraction_conserved),
+                row_lag1_similarity: None,
+                best_lag: None,
+                best_lag_score: None,
+                phase_separation: None,
+                vertical_edge_rate: None,
+                column_edge_autocorr_k: None,
+                column_edge_autocorr_score: None,
+                mean_shift_bp: None,
+                wobble_amplitude_bp: None,
+                n_phase_shifts: 0,
+                irregularity_score: None,
+                class_hint: ClassHint::UnsupportedWidth, // M4 sets this
+            },
+            None => WidthFeatures {
+                array_id: arr.id.clone(),
+                width_bp: w,
+                rows: 0,
+                column_ic: None,
+                fraction_conserved_columns: None,
+                row_lag1_similarity: None,
+                best_lag: None,
+                best_lag_score: None,
+                phase_separation: None,
+                vertical_edge_rate: None,
+                column_edge_autocorr_k: None,
+                column_edge_autocorr_score: None,
+                mean_shift_bp: None,
+                wobble_amplitude_bp: None,
+                n_phase_shifts: 0,
+                irregularity_score: None,
+                class_hint: ClassHint::UnsupportedWidth,
+            },
+        };
+        out.push(row);
+    }
+    (Properties::placeholder(&arr.id, arr.length), out)
 }
 
 #[derive(Debug, Clone)]
