@@ -1,18 +1,25 @@
 # Detect M7 — per-segment recompute + same-width mixed detection
 
-Status: **DRAFT** (2026-05-16). Sign-off needed before any code lands.
+Status: **REVIEWED 2026-05-16**. All Q1–Q11 decisions resolved per
+`docs/reviews/detect_m7_plan_review_2026-05-16.md`; scope tightened
+to HOR-focused same-width mixed detection. Ready for M7.1 code.
 
 ## TL;DR
 
 M7 closes the two architectural deferrals from
 `docs/reviews/detect_implementation_review_completed_2026-05-16.md`
 (findings #2 and #3), tracked as A16 in
-`docs/new/detect_impl_plan.md` §0:
+`docs/new/detect_impl_plan.md` §0. After the 2026-05-16 review, M7
+is scoped narrower than the original draft — it is **detector-side,
+HOR-focused** same-width mixed detection. `simple_TR` stratification
+is held out as a separate taxonomy decision (see §1.3 + Q5 below).
 
-- **Per-segment recompute** — `segments.tsv` rows currently inherit
-  the whole-array class / base_width / k / IC / phase_sep / wobble.
-  M7 replaces that with genuine per-segment feature extraction so
-  segment fields mean what they say.
+- **Internal per-block analysis** (NOT reported segments) —
+  whole-array sequence is split into fixed analysis blocks for the
+  consensus-identity computation only. `segments.tsv` rows continue
+  to be emitted only for biologically meaningful events
+  (phase-shift boundaries today; mixed sub-blocks added by M7).
+  Clean single-family arrays keep `Properties.n_segments = 1`.
 - **Same-width mixed detection** — adjacent satellite families that
   share base width and HOR multiplicity (e.g.,
   `mx_a200-08_b200-08_n050-050`) collapse to a single `HOR` call
@@ -66,246 +73,317 @@ Listed explicitly so we don't sprawl:
   blocks + phase-shift boundaries.
 - **Real `inter_monomer_identity`** (review #5). The relabel-only
   comment from A15 stays; the value remains R(1).
-- **Non-MVP segment classes** (per-segment regime A/B/C). Each
-  segment still inherits the whole-array class for M7; only the
-  *features* are per-segment.
+- **Per-segment classification.** Each reported segment still
+  inherits the whole-array class for M7; only mixed-detection
+  features (block consensus + identity) are computed per block.
+- **`simple_TR` stratification → `mixed`** (review-blocking #2).
+  `T15_stratification.yaml` is two same-period `SIMPLE_TR` blocks
+  with different monomer templates and current expectations
+  (`tests/detect_expectations.tsv`) keep it `simple_TR`. M7 does
+  NOT change that taxonomy. The mixed override applies to
+  `HOR` / `irregular_HOR` only. Reopening the simple_TR-as-mixed
+  question requires updating `docs/new/taxonomy.md`, `T15`, and
+  the expectations file together — a separate decision.
+- **Reporting every fixed block as a `segments.tsv` row.** Review
+  blocker #1: analysis blocks are internal; only meaningful
+  reported segments (phase shifts, mixed sub-blocks) are written.
 
-## 2. Open questions
+## 2. Open questions — resolved 2026-05-16
 
-Each question has a **proposed default** I'd ship with. Items in
-**bold** want explicit sign-off before code lands.
+The original draft posed eleven open questions. Review
+(`docs/reviews/detect_m7_plan_review_2026-05-16.md`) resolved all
+of them. Each subsection now records **(decided)** answer + the
+short rationale. Where the decided answer differs from the
+original proposal, the difference is called out explicitly.
 
 ### Q1. Segmentation criterion — how do we split when there are no phase shifts?
 
-| Option | Description | Cost | When right |
-|---|---|---|---|
-| **(a)** | Fixed-stride blocks at `block_size_rows_min` (100 rows). Append phase-shift boundaries as extra splits. | Cheap | MVP — deterministic, no thresholds to tune |
-| (b) | Detect changepoints in row-to-row R(1). Adaptive segment boundaries. | Medium | If (a) misses architectural transitions inside a block |
-| (c) | First-half vs second-half only. | Cheapest | Too coarse — misses 3-block mixed cases |
-| (d) | HMM segmentation. | High | Already deferred to v2 (§0 Q5) |
+**(decided)** Fixed analysis blocks with adaptive size:
+```
+block_rows = max(block_size_rows_min, ceil(n_rows / max_segments_per_array))
+```
+Phase-shift positions are added as extra split points. Blocks
+with fewer than `min_segment_rows` informative rows are merged
+into a neighbour or skipped from the identity computation. **The
+blocks are an internal `AnalysisBlock` only — they do NOT
+correspond 1:1 to `segments.tsv` rows.** Reported segments stay
+defined as today (phase-shift boundaries), with mixed-call
+sub-blocks added by M7 only when the override fires.
 
-**Proposed: (a).** Fixed 100-row blocks + phase-shift boundaries.
-Simple, deterministic, exposes the stratification thresholds.
-Downside: blocks straddling a transition will dilute both sides.
-We can add (b) later as a refinement without changing the
-interface.
+For HOR / irregular_HOR arrays, block boundaries are **aligned to
+full HOR units** (`hor_length_bp` boundaries) so that partial
+units at block edges don't drive a `mixed` call by themselves.
+
+Difference from original draft: the original proposed reporting
+every fixed block in `segments.tsv` and using a hardcoded
+`block_size_rows_min`. Adaptive sizing + analysis-vs-reported
+separation come from the review.
 
 ### Q2. Consensus computation per segment
 
-Two interpretations:
+**(decided)** Majority-vote consensus, with the comparison width
+chosen by the array's class:
 
-| Option | Description |
-|---|---|
-| **(a)** | Majority-vote consensus at `base_width`, ignoring N (current `consensus::consensus()` behaviour, just called per-segment slice). |
-| (b) | Per-column profile (4-vector probabilities), enabling profile-based similarity. |
+- **`simple_TR`**: `base_width_bp` (only width available).
+- **`HOR` / `irregular_HOR`**: prefer `hor_length_bp` consensus
+  when enough complete HOR units fit in each block (default ≥ 3
+  complete units per block); fall back to `base_width_bp` when
+  unit-level consensus is unreliable. **Reason:** at base_width
+  alone, two HOR families with the same `(base_width, k)` may
+  share many monomer-slot consensuses by chance — the unit-level
+  consensus is where the structural difference shows up.
 
-**Proposed: (a).** Hamming identity on majority-vote consensus is
-both interpretable and matches the spec's "consensus identity"
-language. (b) is a refinement we can take later if (a) is too
-coarse on noisy segments.
+Difference from original draft: the original used `base_width_bp`
+unconditionally. Comparing at `hor_length_bp` for HORs is the
+review's recommendation and is necessary for the
+`mx_a200-08_b200-08` style cases we're trying to fix.
 
 ### Q3. Identity metric for comparing segment consensuses
 
-| Option | Description |
-|---|---|
-| **(a)** | Hamming identity over the consensus bytes (1 − mismatch/length). |
-| (b) | Edit distance (handles indel-drifted segments). |
-| (c) | k-mer composition (R(1)) at consensus level. |
+**(decided)** Hamming identity, **ignoring positions where
+either consensus has `N`**. Two values per pair:
 
-**Proposed: (a).** All segments share the same `base_width`, so
-their consensuses are the same length. Hamming is O(L), trivial
-to test, and what the user reads when they look at the values.
+- `identity`: matches / (matches + mismatches) over non-N positions
+- `coverage`: (matches + mismatches) / length
+
+If `coverage < 0.70` (configurable as `min_identity_coverage`),
+return `None` for that pair — the comparison is uninformative.
+
+Difference from original draft: the original used raw Hamming.
+Without an N guard, a block with many indels (collapsed to N
+columns by the wrap) would look perfectly identical to anything,
+producing false negatives on mixed; without the coverage floor,
+a block with one informative column would dominate the decision.
 
 ### Q4. Two thresholds, two decisions
 
-`DetectorConfig` already exposes:
-- `stratification_same_threshold` (0.90) — "considered same family"
-- `stratification_diff_threshold` (0.80) — "considered different family"
+**(decided)** Defaults unchanged:
+- `stratification_same_threshold` = 0.90
+- `stratification_diff_threshold` = 0.80
 
-Three-way decision per pair:
+Three-way per pair:
 - identity ≥ 0.90 → same family
 - identity ≤ 0.80 → different family
-- 0.80 < identity < 0.90 → undecided
+- 0.80 < identity < 0.90 → borderline (diagnostic only,
+  not a mixed trigger)
 
-**Proposed pair-aggregation rule for mixed call:** if *any* pair of
-segments has identity ≤ `stratification_diff_threshold` → mixed.
-Borderline (between same/diff thresholds) doesn't itself trigger
-mixed — too noisy. We could revisit if benchmark shows borderline
-cases as the common confusion.
+**Pair aggregation:** evaluate **all valid pairwise comparisons**
+across analysis blocks (not only "to seg 1"). If *any* valid pair
+has identity ≤ `stratification_diff_threshold` → mixed override
+fires. Pairs with `coverage < min_identity_coverage` are excluded
+from the test.
 
-### Q5. **Class-level interaction order — when does mixed fire vs irregular_HOR?**
+Difference from original draft: the original mixed pseudocode
+compared only to block 1; review caught the mismatch with the
+prose ("any pair"). All-pairs is the right rule for arrays with
+≥ 3 blocks where the first block isn't the divergent one.
 
-Today's order in `mod.rs::run_array_m4`:
+### Q5. Class-level interaction order — when does mixed fire vs irregular_HOR?
+
+**(decided)** M7 order:
 1. classify (HOR / simple_TR / mixed / ambiguous)
-2. irregular_HOR demotion if `irregularity_score ≥ 0.50`
-3. wobble-dominance guard (kept since 2026-05-16)
-
-Proposed M7 order:
-1. classify (as today)
-2. **segment recompute + consensus identity → mixed override** *(NEW)*
+2. **mixed override via consensus identity** — **HOR /
+   irregular_HOR only** — *(NEW)*
 3. irregular_HOR demotion
 4. wobble-dominance guard
 
-i.e., a single-family HOR with high block-IC variance keeps the
-old "irregular_HOR" demotion path; an HOR whose segments
-genuinely disagree on consensus becomes `mixed` first and bypasses
-irregularity entirely.
+**`simple_TR` is NOT eligible for the mixed override in M7.**
+Reason: `T15_stratification` is the explicit fixture for
+two-block same-period simple_TR with different monomers, and
+the current expectation in `tests/detect_expectations.tsv` is
+`simple_TR`. Enabling the override on simple_TR would silently
+change the taxonomy. If we later decide simple_TR
+stratification should become `mixed`, that's a separate joint
+change to `taxonomy.md` + `T15` + the expectations file.
 
-**Open:** should `simple_TR` also be eligible for the mixed
-override? Two simple_TR families at different monomer sequences
-but same period is the simple_TR analogue of the same-width HOR
-mixed case. **Proposed: yes**, gated by the same identity test.
+Difference from original draft: original proposed simple_TR
+eligibility as "default yes"; review correctly rejected that as
+a silent taxonomy change.
 
 ### Q6. Per-segment class assignment
 
-Plan §6.9 nominally calls for per-segment regime A/B/C
-classification. Two interpretations:
+**(decided)** Light option. Every reported segment inherits the
+final whole-array class. Heavy per-segment `classify::decide_array`
+deferred to M8+. Note in the Segment row docstring that
+`Segment.class` is **not** an independent per-segment
+classification result; it's the array's class applied to this
+sub-range.
 
-| Option | Description | M7 fit |
-|---|---|---|
-| **(a)** | Light: every segment inherits the whole-array class. Per-segment fields (IC, phase_sep, wobble, irregularity) are real, but `Segment.class` ≡ `Properties.class`. | Yes |
-| (b) | Heavy: each segment runs its own `classify::decide_array` with its slice of periods. Segment classes can differ. | M8 |
+Difference from original draft: alignment with review — same
+decision, just made explicit in docstring/header.
 
-**Proposed: (a) for M7.** Heavy per-segment classify multiplies
-the per-array runtime cost and we don't have a clear use case yet
-— the array-level class is usually right. The light option still
-delivers the headline win (same-width mixed detection) and the
-honest per-segment features.
+### Q7. Output schema impact
 
-### Q7. **Output schema impact**
+**(decided)** Three schema changes:
 
-The `segments.tsv` schema already has the per-segment fields
-(`base_width_bp`, `hor_k`, `column_conservation`, `phase_separation`,
-`wobble_amplitude_bp`, `irregularity_score`). Today they're filled
-with whole-array values; M7 fills them with per-segment values.
-That's a **semantic** change to existing columns, not a schema bump.
+1. **New `segments.tsv` columns:**
+   - `consensus_identity_to_reference` — Hamming identity to the
+     reference block (medoid block, or block 0 if all-pairs
+     median is ambiguous). Renamed from the original
+     `consensus_identity_to_seg1` per review.
+   - `consensus_identity_coverage` — fraction of non-N positions
+     used (review #79: low-coverage identity must be
+     distinguishable from a high-confidence comparison).
+2. **`consensus.fa`:** emit per-segment consensus records **only
+   when `Properties.class == Mixed`**. Naming:
+   `<array_id>_seg<N>_monomer` (and `_hor_unit` if a unit-level
+   consensus was the basis for the decision). Single-family
+   arrays continue to emit just the whole-array monomer + optional
+   hor_unit; no segment proliferation.
+3. **`diagnostics.json` `schema_version`** bumps 1 → 2. The new
+   per-array block exposes `analysis_blocks` (internal) + the new
+   identity columns. Schema-drift tests bumped.
 
-New questions:
-
-1. Do we add `consensus_identity_to_seg1` to `segments.tsv`? It's
-   the load-bearing M7 number, useful for diagnostics.
-2. Do we write per-segment consensus FASTAs to `consensus.fa`?
-
-**Proposed:**
-- Add `consensus_identity_to_seg1` as a new column. Requires
-  `SEGMENTS_HEADER` and the test that asserts column count to be
-  bumped. Bump `diagnostics.json schema_version` from 1 → 2.
-- Write per-segment consensus to `consensus.fa` *only when the
-  array is called `mixed`*. Naming: `<array_id>_seg<N>_monomer`.
-  Single-family arrays continue to emit only the whole-array
-  monomer + hor_unit (no segment proliferation in the output).
+Difference from original draft: column name (review preference),
+explicit coverage column (review must-have), explicit
+"reported segments are not analysis blocks" boundary.
 
 ### Q8. Performance budget
 
-Per-segment recompute is roughly O(n_segments × L_segment × max_k).
-A 50 000-row array at 100-row segments = 500 segments, each ~17 kb,
-each R(k) ~O(L × 30) → ~25 ms × 500 = 12 s per array. Times 1600
-arrays = 5 h. Unacceptable.
+**(decided)** New config knobs (added to `DetectorConfig`):
 
-**Proposed mitigations** (need sign-off):
-- Cap `n_segments_per_array` (default 32). Coarser blocks for
-  large arrays.
-- Skip per-segment R(k) when segments inherit the whole-array
-  class anyway (Q6 option a). We only need wrap + column IC +
-  consensus per segment for the identity test — that's O(L) per
-  segment, total O(N) per array. Should run in tens of ms.
-- Rayon-parallelise the segment loop within each array.
+```rust
+pub max_segments_per_array: usize = 32,
+pub min_segment_rows: usize        = 20,
+pub min_identity_coverage: f64     = 0.70,
+pub min_complete_units_per_block: usize = 3,  // HOR-unit consensus floor
+```
 
-If we adopt (a) + (a) of Q6 + skip per-segment R(k), the
-per-array overhead should be sub-100 ms.
+(Currently inert: `stratification_same_threshold`,
+`stratification_diff_threshold`.)
+
+Implementation rules:
+- **Skip per-segment R(k)** — segments inherit class (Q6 light),
+  so only wrap + column IC + consensus are needed per block →
+  O(N) total per array.
+- **No nested rayon** — array-level batch is already parallel via
+  rayon at `detect-batch`. Don't add segment-level parallelism
+  until profiling demands it.
+- **Adaptive block size** — see Q1.
+
+With these, the per-array overhead should be < 100 ms even on
+the largest v2 arrays.
+
+Difference from original draft: explicit config fields (review
+flagged the implicit constants); no nested rayon (review).
 
 ### Q9. Backward compatibility with the M6 baseline (94.4 %)
 
-Adding mixed detection may flip currently-correct calls:
+**(decided)** Acceptance gate tightened per review:
 
-- HOR cases with mild within-array divergence may newly cross
-  the `diff_threshold` and become mixed (false mixed).
-- mixed cases currently called HOR may correctly become mixed
-  (true mixed — the intended win).
-
-**Proposed acceptance gate**:
-- `mixed` category ≥ 70 % on the v2 corpus (vs 96 % oracle / 18 %
-  kite). Bumping to 90 % is the target but we accept 70 % as the
-  "M7 ships" floor.
+- `mixed` on **kite-derived periods** ≥ 70 % (current 18 %; the
+  78 pp regression is the load-bearing motivation).
+- `mixed` on **oracle periods** ≥ 94 % (i.e., no more than a 2 pp
+  drop from the current 96 %). This is the new constraint the
+  review added — we must not lose existing wins.
 - No other category drops by > 2 pp from the M6 baseline.
 - Core CI fixtures (T01, T05, T06, T07, T10, T13, T17, T18) still
   pass exactly.
+- Explicit false-mixed guards (Tests §):
+  - clean HOR with high within-family divergence (`hor_clean d40`)
+    must not become mixed
+  - `hor_wobble` and `hor_shift` HORs must not become mixed
+  - inversion (`hor_event_inversion`) — see Risks §
+  - `T15_stratification` locked to `simple_TR`
 
-If those bounds aren't reachable, we re-tune `stratification_*`
-thresholds before merging.
+If the thresholds can't meet these gates, we re-tune
+`stratification_*` before merging.
 
-### Q10. **Same-width mixed via kite-derived periods**
+Difference from original draft: oracle-side mixed floor and
+fixture-locked false-mixed list both come from the review.
 
-The kite → detect run report shows the mixed regression is
-*structural* — kite emits ≤ 2 strong periods per array. M7 fixes
-the mixed regression *without changing the kite emitter*, because
-the new test runs on whole-array sequence, not on the period
-candidate list.
+### Q10. Same-width mixed via kite-derived periods
 
-**Proposed:** ship M7 with no kite-side changes; re-run kite →
-detect after M7 lands and update `docs/reports/`.
+**(decided)** Ship M7 with **no kite-side changes**. The new
+mixed test runs on whole-array sequence at the chosen comparison
+width — independent of the period candidate list — so the
+regression should fix from the detector side alone. Re-run
+kite → detect after M7 lands, write an updated report, and only
+then decide whether `src/emit_periods.rs` needs further tuning.
 
-### Q11. **Diagnostics JSON schema version bump**
+### Q11. Diagnostics JSON schema version bump
 
-`detect/io.rs::write_diagnostics()` currently writes
-`"schema_version": 1`. M7 changes per-segment fields semantically
-and adds at least one column. **Proposed: bump to 2** and document
-the change in the impl plan.
+**(decided)** Bump `diagnostics.json::schema_version` 1 → 2.
+Schema-drift tests bumped accordingly. Downstream report
+readers (`tools/detect_eval/eval.py`, `tools/detect_eval/report.py`)
+must keep working — they read array_id + class + a small set of
+properties columns, all stable.
 
-## 3. Implementation plan (draft)
+## 3. Implementation plan
 
 ### 3.1 Modules touched
 
 | File | Change |
 |---|---|
-| `src/detect/segment.rs` | Rewrite. Add per-segment wrap + column IC + consensus + identity to seg1. |
-| `src/detect/types.rs` | Add `Segment.consensus_identity_to_seg1: Option<f64>`. Bump `SEGMENTS_HEADER`. |
-| `src/detect/mod.rs::run_array_m4` | Insert step "segment recompute + mixed override" between classify and irregular demotion. |
-| `src/detect/classify.rs` | Expose a small helper `consider_mixed_via_segments()` so the override is callable from `mod.rs`. |
-| `src/detect/consensus.rs` | Add `consensus_on_slice()` for per-segment use (or reuse `consensus()` with byte slices — already supports it). |
-| `src/detect/config.rs` | (No change — `stratification_*` already exist.) |
-| `src/detect/io.rs` | Add per-segment consensus to `consensus.fa` when class=mixed. Bump diagnostics schema_version to 2. |
-| `docs/new/detect_impl_plan.md` | New A19 amendment; mark M7 as in-progress in §10. |
-| `tools/detect_eval/` | Re-run + update reports. |
+| `src/detect/analysis_blocks.rs` *(new)* | Internal `AnalysisBlock { start_row, end_row, consensus, n_complete_units }`; builder respects `max_segments_per_array`, `min_segment_rows`, HOR-unit alignment. |
+| `src/detect/segment.rs` | Keep `split(&Properties)` for phase-shift segments (today's behaviour). M7 adds a separate path that emits segment rows only when `Properties.class == Mixed`, one row per divergent analysis block. |
+| `src/detect/types.rs` | Add two `Segment` fields: `consensus_identity_to_reference: Option<f64>` and `consensus_identity_coverage: Option<f64>`. Bump `SEGMENTS_HEADER`. |
+| `src/detect/mod.rs::run_array_m4` | Insert step "mixed-override via analysis blocks" between classify and irregular demotion. Apply only to `Class::HOR` / `Class::IrregularHOR`. |
+| `src/detect/classify.rs` | Expose helper `mixed_override_via_blocks()` so the override is callable from `mod.rs`. |
+| `src/detect/consensus.rs` | Add `consensus_on_slice(seq, width, start_row, end_row)`. Reuse the existing majority-vote logic. |
+| `src/detect/config.rs` | Add `max_segments_per_array=32`, `min_segment_rows=20`, `min_identity_coverage=0.70`, `min_complete_units_per_block=3`. Document their use. |
+| `src/detect/io.rs` | Emit per-segment consensus to `consensus.fa` ONLY when class=mixed. Bump diagnostics `schema_version` to 2. |
+| `tests/detect_*` | New fixtures + assertions (see §6). |
+| `docs/new/detect_impl_plan.md` | New A19 amendment; mark M7 in §10. |
+| `docs/reports/` | Post-M7 rerun report. |
 
-### 3.2 Sub-milestones (PR-sized)
+### 3.2 Sub-milestones (PR-sized, after review)
 
-**M7.1 — Per-segment features, no class change.**
-- Refactor `segment::split()` to compute per-segment wrap + IC + R(1) + consensus.
-- Fill `Segment` fields with per-segment values (no schema change).
-- Tests: per-segment IC matches whole-array IC when only one segment;
-  per-segment IC differs from whole-array IC when two segments differ.
-- **Acceptance**: existing 264 lib + integration tests still pass;
-  no benchmark regression.
+**M7.1 — Analysis blocks + per-block consensus + identity stats (no class change).**
+- New module `src/detect/analysis_blocks.rs` with the builder
+  (adaptive sizing, HOR-unit alignment, `min_segment_rows` skip).
+- New `consensus::consensus_on_slice` helper.
+- Per-block identity computation with N-skip + coverage tracking.
+- Wire into `run_array_m4` to compute the stats but **not** act
+  on them.
+- Tests:
+  - block builder respects `max_segments_per_array` on huge arrays
+  - HOR-unit alignment drops partial units at edges
+  - Hamming-with-N-skip behaviour
+  - low-coverage pair returns `None`
+- **Acceptance**: existing 316 tests still pass; new tests pass;
+  no benchmark regression (class behaviour unchanged).
 
-**M7.2 — Consensus identity column + mixed override.**
-- Add `consensus_identity_to_seg1` to `Segment` and `SEGMENTS_HEADER`.
-- In `run_array_m4`, after classify and before irregularity demotion,
-  if min pairwise identity ≤ `stratification_diff_threshold` →
-  rewrite class to `Mixed` (with reason explaining which segments
-  diverged).
-- Tests: synthesise a 2-block mixed config (same width, same k,
-  different divergence seed); assert detector calls `mixed`.
-- **Acceptance**: mixed category accuracy on `ground_truth_v2/`
-  improves to ≥ 70 % (kite-driven baseline 18 %); no other
-  category drops > 2 pp.
+**M7.2 — Mixed override for HOR / irregular_HOR.**
+- Add `consensus_identity_to_reference` and
+  `consensus_identity_coverage` to `Segment`; bump
+  `SEGMENTS_HEADER`.
+- In `run_array_m4`, after classify and before irregular demotion:
+  if `Class::HOR | Class::IrregularHOR` AND any valid pairwise
+  identity ≤ `stratification_diff_threshold` → rewrite class to
+  `Mixed` with reason citing the divergent pair.
+- Emit one `Segment` row per analysis block ONLY when the
+  override fires (mixed path); keep clean arrays at
+  `n_segments = 1`.
+- Tests:
+  - positive: 2-block same-`(base_width, k)` mixed → `mixed`
+  - negative-clean-hor-d40: high within-family divergence stays
+    `HOR`
+  - negative-wobble: stays `HOR`
+  - negative-phase-shift: stays `HOR`
+  - negative-T15: stays `simple_TR` (override doesn't fire on
+    simple_TR)
+  - low-coverage pair: stays HOR
+- **Acceptance**: `mixed` on v2 corpus ≥ 70 % (kite-derived) AND
+  ≥ 94 % (oracle); no other category drops > 2 pp; M4 fixtures
+  pass exactly.
 
-**M7.3 — Wire stratification thresholds + segment-consensus FASTA.**
-- Use `stratification_same_threshold` and `_diff_threshold` from
-  config (currently inert).
-- Emit per-segment consensus records to `consensus.fa` only when
-  class=mixed.
-- Bump diagnostics `schema_version` to 2.
-- **Acceptance**: schema-drift tests bumped, regen of CLAUDE.md +
-  README + impl plan as a new A19 amendment.
+**M7.3 — Schema + diagnostics + segment-consensus FASTA.**
+- `consensus.fa`: emit per-segment consensus records ONLY when
+  class=mixed, naming `<array_id>_seg<N>_monomer`.
+- Bump diagnostics `schema_version` 1 → 2; update schema-drift
+  tests.
+- Update CLAUDE.md + README to mention the new `segments.tsv`
+  columns + the mixed-only consensus rows.
+- **Acceptance**: schema-drift tests bumped, `tools/detect_eval/`
+  still parses every output (verified end-to-end).
 
-**M7.4 — Documentation + rerun reports.**
-- Update `docs/new/detect_impl_plan.md` with A19 and mark M7 done
-  in §10.
-- Rerun kite → detect on v2 corpus; update
-  `docs/reports/kite_to_detect_v2_*.md` with the new numbers (or
-  write a fresh report dated post-M7).
-- Re-render the dashboard.
+**M7.4 — Docs + rerun reports + impl-plan amendment.**
+- Add A19 to `detect_impl_plan.md` §0; mark M7 done in §10.
+- Re-run kite → detect on v2; write
+  `docs/reports/kite_to_detect_v2_<post-m7>.md` (or amend the
+  existing report).
+- Re-render the dashboard (`tools/detect_eval/report.py`).
 
 ### 3.3 New `Segment` row
 
@@ -315,48 +393,81 @@ pub struct Segment {
     pub segment_id: usize,
     pub start_bp: usize,
     pub end_bp: usize,
-    pub class: Class,           // M7.1: stays whole-array class
+    pub class: Class,            // inherited from final array class
     pub base_width_bp: Option<usize>,
     pub hor_k: Option<usize>,
-    pub column_conservation: Option<f64>,        // NEW: per-segment IC
-    pub phase_separation: Option<f64>,           // NEW: per-segment phase_sep
-    pub wobble_amplitude_bp: Option<f64>,        // NEW: per-segment wobble
-    pub irregularity_score: Option<f64>,         // already had this
-    pub consensus_identity_to_seg1: Option<f64>, // NEW: M7.2
+    pub column_conservation: Option<f64>,                  // per-segment IC
+    pub phase_separation: Option<f64>,                     // per-segment phase_sep
+    pub wobble_amplitude_bp: Option<f64>,                  // per-segment wobble
+    pub irregularity_score: Option<f64>,                   // existing
+    pub consensus_identity_to_reference: Option<f64>,      // NEW (M7.2)
+    pub consensus_identity_coverage: Option<f64>,          // NEW (M7.2)
 }
 ```
 
-(The first 8 fields already exist in the struct — only
-`consensus_identity_to_seg1` is genuinely new.)
+Only the last two fields are genuinely new. The reference block
+is the medoid of the analysis-block set (block with highest sum
+of pairwise identities to all others); ties broken by smallest
+segment_id.
 
 ### 3.4 Pseudocode for the mixed override
 
 ```rust
-fn mixed_override_via_segments(
+fn mixed_override_via_blocks(
     seq: &[u8],
-    base_width: usize,
-    boundaries: &[usize],          // segment boundaries in rows
+    blocks: &[AnalysisBlock],
+    comparison_width: usize,   // hor_length_bp if available, else base_width_bp
     cfg: &DetectorConfig,
 ) -> Option<MixedDecision> {
-    if boundaries.len() < 2 { return None; }
-    let consensuses: Vec<Vec<u8>> = boundaries
-        .windows(2)
-        .filter_map(|w| consensus::consensus_on_slice(seq, base_width, w[0], w[1]))
-        .collect();
-    if consensuses.len() < 2 { return None; }
-    let seg1 = &consensuses[0];
-    let identities: Vec<f64> = consensuses[1..]
+    if blocks.len() < 2 {
+        return None;
+    }
+    // Per-block consensus at the comparison width.
+    let consensuses: Vec<Vec<u8>> = blocks
         .iter()
-        .map(|c| hamming_identity(seg1, c))
+        .filter_map(|b| consensus::consensus_on_slice(
+            seq, comparison_width, b.start_row, b.end_row,
+        ))
         .collect();
-    let min_id = identities.iter().cloned().fold(f64::INFINITY, f64::min);
-    if min_id <= cfg.stratification_diff_threshold {
+    if consensuses.len() < 2 {
+        return None;
+    }
+    // All-pairs identity with N-skip + coverage gate.
+    let mut pairs: Vec<(usize, usize, f64)> = Vec::new();
+    for i in 0..consensuses.len() {
+        for j in (i + 1)..consensuses.len() {
+            if let Some((ident, cov)) = hamming_identity_n_skip(
+                &consensuses[i], &consensuses[j],
+            ) {
+                if cov >= cfg.min_identity_coverage {
+                    pairs.push((i, j, ident));
+                }
+            }
+        }
+    }
+    if pairs.is_empty() {
+        return None;  // insufficient coverage anywhere
+    }
+    let min_pair = pairs
+        .iter()
+        .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
+        .copied()
+        .unwrap();
+    if min_pair.2 <= cfg.stratification_diff_threshold {
         return Some(MixedDecision {
             reason: format!(
-                "mixed — segment-consensus identity {:.3} ≤ diff_threshold {:.3}",
-                min_id, cfg.stratification_diff_threshold
+                "mixed — block-consensus identity {:.3} ≤ diff_threshold {:.3} \
+                 (blocks {} vs {})",
+                min_pair.2, cfg.stratification_diff_threshold,
+                min_pair.0, min_pair.1,
             ),
-            n_segments_diverging: identities.iter().filter(|&&i| i <= cfg.stratification_diff_threshold).count() + 1,
+            // Reference block = medoid (highest sum of pairwise identities
+            // to others); ties broken by smallest index.
+            reference_block: pick_medoid(&pairs, consensuses.len()),
+            divergent_blocks: pairs.iter()
+                .filter(|p| p.2 <= cfg.stratification_diff_threshold)
+                .flat_map(|p| [p.0, p.1])
+                .collect::<HashSet<usize>>(),
         });
     }
     None
@@ -367,73 +478,108 @@ fn mixed_override_via_segments(
 
 | Risk | Mitigation |
 |---|---|
-| False mixed on noisy single-family arrays (hor_clean d40+, hor_wobble) | `diff_threshold` defaulted to 0.80 — well below `same_threshold` 0.90 — so only genuinely divergent consensuses trigger. Tune in M7.2 acceptance. |
-| Per-segment recompute slow on large arrays | Q8 mitigations. Cap n_segments per array. |
-| Inversion segments look mixed (RC consensus ≠ forward consensus) | Inversions already deferred to v2 strand-aware. Add an explicit "skip mixed override when array is hor_event_inversion" path? Probably not — let the false-mixed count be the cost of deferring strand awareness. Document in the reason field. |
-| Borderline (0.80 < id < 0.90) cases that should be mixed | Q4. Tune thresholds in M7.2 if benchmark shows this is the common confusion. |
-| Schema bump in diagnostics.json breaks downstream eval | Eval uses array_id + class only; schema bump should be transparent. Verify with `tools/detect_eval/eval.py` before/after. |
+| False mixed on `hor_clean d40+` / `hor_wobble` | `diff_threshold` defaulted to 0.80; HOR-unit comparison + N-skip + coverage gate (Q3) keep noise off the test. Locked-in negative tests (§6) catch regressions. |
+| Per-segment recompute slow on large arrays | Q8 mitigations: cap `max_segments_per_array=32`, skip per-block R(k), no nested rayon. |
+| Inversion segments look mixed (RC consensus ≠ forward consensus) | Inversions defer strand-aware to v2 (OQ3). Two options: (a) explicit "skip mixed override when array is hor_event_inversion" path (needs a category-aware test — not available at detect time); (b) accept the false-mixed count as the cost of deferring strand awareness, document in `reason` field. **Default: (b)** — let benchmark numbers tell us if we need (a). |
+| `simple_TR` stratification taxonomy change creeps in | Hard-coded class gate in `mod.rs`: mixed override fires only for `Class::HOR` and `Class::IrregularHOR`. `T15_stratification` test asserts `simple_TR`. |
+| Borderline pairs (0.80 < id < 0.90) that should be mixed | Q4: borderline is diagnostic-only, not a trigger. If benchmark shows this is the common confusion, M8 candidate. |
+| Schema bump in diagnostics.json breaks downstream eval | `tools/detect_eval/eval.py` and `report.py` read `array_id` + `class` + a fixed set of `Properties` columns; schema_version bump should be transparent. Verify via M7.3 acceptance. |
+| Reference block instability (medoid changes when one block is borderline) | Tie-break by smallest segment_id; document in Segment struct comment. |
 
 ## 5. Acceptance criteria (M7 done when)
 
-1. `mixed` category accuracy ≥ 70 % on `ground_truth_v2/` under both:
-   - Oracle periods (target ≥ 90 %; current 96 %, expect ~unchanged
-     or slightly higher with the new signal).
-   - Kite-emitted periods (target ≥ 70 %; current 18 %, the kite →
-     detect report regression is the load-bearing motivation).
-2. No category drops by > 2 pp from the M6 baseline.
-3. Core CI fixtures (T01, T05, T06, T07, T10, T13, T17, T18) still
+1. **`mixed` category on `ground_truth_v2/`:**
+   - oracle periods: **≥ 94 %** (no more than 2 pp drop from
+     today's 96 %)
+   - kite-emitted periods: **≥ 70 %** (current 18 %)
+2. No other category drops by > 2 pp from the M6 baseline (across
+   both oracle and kite-derived runs).
+3. Locked-in false-mixed negatives (each its own test):
+   - clean HOR with `d40` divergence stays `HOR`
+   - `hor_wobble` cases stay `HOR`
+   - `hor_shift` cases stay `HOR`
+   - `T15_stratification` stays `simple_TR`
+   - `hor_event_inversion` — documented expected behaviour (see
+     Risks); test asserts either current behaviour or the
+     fixed-up behaviour explicitly
+4. Positive case: new fixture for 2-block same-`(base_width, k)`
+   HOR with distinct monomer templates → `mixed`.
+5. Low-coverage pair test: blocks dominated by `N` columns must
+   NOT trigger `mixed`.
+6. Core CI fixtures (T01, T05, T06, T07, T10, T13, T17, T18) still
    pass exactly via `cargo test --release --test detect_m4`.
-4. `cargo test --release` green; new unit tests for
-   `consensus_on_slice`, `hamming_identity`, segment recompute,
-   and the synthesised 2-block mixed fixture.
-5. `tests/detect_kite_emit.rs` still passes; no schema-related
+7. `cargo test --release` green; new unit tests for the analysis-
+   block builder, Hamming-with-N-skip, and the mixed override
+   pseudocode.
+8. `tests/detect_kite_emit.rs` still passes; no schema-related
    regression.
-6. `docs/new/detect_impl_plan.md` updated with A19 amendment and
+9. `docs/new/detect_impl_plan.md` updated with A19 amendment and
    M7 marked done in §10.
-7. `docs/reports/kite_to_detect_v2_<post-m7-date>.md` written
-   with the new numbers and an updated dashboard.
+10. `docs/reports/kite_to_detect_v2_<post-m7-date>.md` written
+    with the new numbers and an updated dashboard.
 
-## 6. Sub-milestones, sized for review
+## 6. Tests to add (locked, per review)
+
+Each lives under `tests/detect_*.rs`:
+
+| Test | Fixture | Expected |
+|---|---|---|
+| Positive: same-`(base_width, k)` 2-block HOR | new YAML (`tests/synth_configs/T20_same_width_mixed.yaml`) — two `HOR` blocks, identical base_width + k, different monomer templates | `Class::Mixed`, identity ≤ 0.80 in reason |
+| Negative: clean HOR `d40` | exists (`hor_clean d40` cases) | stays `Class::HOR` |
+| Negative: wobble HOR | exists (T03 / `hor_wobble`) | stays `Class::HOR` |
+| Negative: phase-shift HOR | exists (T10 / `hor_shift`) | stays `Class::HOR` |
+| Negative: `T15_stratification` | exists | stays `Class::SimpleTR` — override doesn't apply to simple_TR |
+| Inversion (documented expectation) | exists (T12 / `hor_event_inversion`) | either stays `HOR` (false-mixed cost documented) or document the new expectation explicitly |
+| Low-coverage: N-dominated blocks | synthetic (large N regions) | stays `Class::HOR` — coverage gate kicks in |
+| Schema test: `segments.tsv` column count | post-M7 | 13 columns (was 11) |
+| Schema test: `diagnostics.json::schema_version` | post-M7 | 2 |
+
+## 7. Sub-milestones, sized for review
 
 | | Description | Code LOC est | Wall est | Risk |
 |---|---|---:|---:|---|
-| M7.1 | Per-segment feature recompute (no class change) | ~150 | 0.5 d | Low |
-| M7.2 | Identity column + mixed override | ~120 | 0.5 d | Med — tuning |
-| M7.3 | Stratification thresholds + segment-consensus FASTA + schema_version bump | ~80 | 0.5 d | Low |
-| M7.4 | Docs + rerun reports | ~0 (md only) | 0.5 d | Low |
+| M7.1 | Analysis blocks + per-block consensus + identity stats (no class change) | ~200 | 0.5 d | Low |
+| M7.2 | Mixed override + new `Segment` columns + locked tests | ~150 | 0.5 d | Med — tuning |
+| M7.3 | Schema bump + segment-consensus FASTA for mixed | ~80 | 0.5 d | Low |
+| M7.4 | A19 amendment + rerun reports + dashboard | ~0 (md only) | 0.5 d | Low |
 
 Total ≈ 2 days of focused work, four PRs. Each PR runs the full
 test suite + benchmark eval; M7.2 has a calibration loop on
 `stratification_*` thresholds.
 
-## 7. Out of scope for M7 (deferred to M8+)
+## 8. Out of scope for M7 (deferred to M8+)
 
-- Per-segment class assignment (Q6 option b)
+- Per-segment class assignment (Q6 option b — heavy per-block
+  `classify::decide_array`)
 - Adaptive segment boundaries via changepoint detection (Q1 option b)
-- HMM-based segmentation (§0 Q5, deferred)
+- HMM-based segmentation (§0 Q5, deferred to v2)
 - Strand-aware inversion (OQ3)
 - Real `inter_monomer_identity` computation (review #5)
 - Nested-HOR (T09) support
+- `simple_TR`-as-mixed taxonomy change (review-blocking #2;
+  needs joint update to `taxonomy.md` + `T15` + expectations)
 
-## 8. Things I want sign-off on before coding
+## 9. Review history
 
-The bolded **(B)** open questions:
+| Date | Document | Outcome |
+|---|---|---|
+| 2026-05-16 | `docs/new/detect_m7_plan.md` (DRAFT) | Original 11-question plan posted |
+| 2026-05-16 | `docs/reviews/detect_m7_plan_review_2026-05-16.md` | All Q1–Q11 resolved; two scope changes: (a) analysis blocks vs reported segments split; (b) `simple_TR` mixed override held out |
+| 2026-05-16 | This document | DRAFT → REVIEWED, decisions folded in |
 
-- **Q5**: irregularity ordering and whether simple_TR is mixed-eligible.
-- **Q7**: schema bump scope — new column + segment consensuses in FASTA.
-- **Q8**: performance mitigations (cap n_segments, skip per-segment R(k)).
-- **Q10**: ship M7 with no kite-side changes; reassess emit_periods after.
-- **Q11**: diagnostics.json `schema_version` 1 → 2.
-
-For each I've proposed a default. If any of those defaults are
-wrong, I'd rather find out before M7.1 lands.
-
-## 9. References
+## 10. References
 
 - `docs/reviews/detect_implementation_review_completed_2026-05-16.md`
   findings #2 (segment recompute) and #3 (same-width mixed).
+- `docs/reviews/detect_m7_plan_review_2026-05-16.md` — review of this
+  plan's first draft; resolutions inlined above.
 - `docs/new/detect_impl_plan.md` §0 A16 (the explicit deferral).
+- `docs/new/taxonomy.md` — pin for the `simple_TR` stratification
+  policy referenced in Q5.
 - `docs/reports/kite_to_detect_v2_2026-05-16.md` (the 78 pp mixed
   regression under kite-derived periods).
-- `src/detect/segment.rs` (current MVP — replaced in M7.1).
-- `src/detect/config.rs` (where `stratification_*_threshold` live).
+- `tests/detect_expectations.tsv` — pins the `T15_stratification`
+  expectation referenced in Q5.
+- `src/detect/segment.rs` (current MVP — extended, not replaced).
+- `src/detect/config.rs` (where `stratification_*_threshold` live;
+  new fields land here in M7.1).
