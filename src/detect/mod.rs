@@ -60,7 +60,7 @@ pub fn run_one(
     let mut width_features: Vec<WidthFeatures> = Vec::new();
 
     for (arr, pers) in &paired {
-        let (props, mut widths) = run_array_m3(arr, pers, cfg);
+        let (props, mut widths) = run_array_m3_5(arr, pers, cfg);
         properties.push(props);
         width_features.append(&mut widths);
         // M4 will append segments.
@@ -80,6 +80,63 @@ pub fn run_one(
 /// M0-only per-array work: build a placeholder property row.
 fn run_array_m0(arr: &ArrayRecord) -> Properties {
     Properties::placeholder(&arr.id, arr.length)
+}
+
+/// M3.5 per-array work: M3 + Pass-B phase-shift offset recovery.
+///
+/// The "primary width" is the input period with the highest score
+/// among those that produced valid Pass-A stats. (A heuristic until
+/// M4's `phase::pick_best_width` lands.) Pass B runs at that width
+/// to populate `Properties.n_phase_shifts`,
+/// `phase_shift_positions`, and `phase_shift_offsets`.
+fn run_array_m3_5(
+    arr: &ArrayRecord,
+    pers: &[PeriodCandidate],
+    cfg: &DetectorConfig,
+) -> (Properties, Vec<WidthFeatures>) {
+    let (mut props, widths) = run_array_m3(arr, pers, cfg);
+
+    // Find the highest-scored input period that produced valid Pass A
+    // (i.e. width_features row has n_phase_shifts populated).
+    let mut periods_sorted: Vec<&PeriodCandidate> = pers.iter().collect();
+    periods_sorted.sort_by(|a, b| {
+        b.period_score
+            .partial_cmp(&a.period_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let primary = periods_sorted.iter().find_map(|p| {
+        widths.iter().find(|w| w.width_bp == p.period_bp && w.rows >= 2)
+    });
+    if let Some(w) = primary {
+        let width = w.width_bp;
+        let n_rows = w.rows;
+        if let Some(shift_feats) = shift::compute(&arr.seq, width, n_rows, cfg) {
+            let window_rows = (cfg.block_size_rows_min / 8).max(8);
+            let offsets = shift::recover_offsets_at_breakpoints(
+                &arr.seq,
+                width,
+                n_rows,
+                &shift_feats.breakpoints,
+                window_rows,
+            );
+            // bp position of breakpoint at best_shift index `b` is
+            // (b + 1) * width — the start of the post-shift row.
+            let positions: Vec<usize> = shift_feats
+                .breakpoints
+                .iter()
+                .map(|&b| (b + 1) * width)
+                .collect();
+            props.n_phase_shifts = positions.len();
+            props.phase_shift_positions = positions;
+            props.phase_shift_offsets = offsets.iter().map(|&v| v as i64).collect();
+            props.n_segments = 1 + props.n_phase_shifts;
+            props.mean_shift_bp = Some(shift_feats.mean_shift_bp);
+            props.wobble_amplitude_bp = Some(shift_feats.wobble_amplitude_bp);
+            props.wobble_periodicity_bp = shift_feats.wobble_periodicity_bp;
+            props.base_width_bp = Some(width);
+        }
+    }
+    (props, widths)
 }
 
 /// M3 per-array work: M2 + edge field + Pass-A shift signal.

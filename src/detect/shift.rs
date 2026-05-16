@@ -147,6 +147,110 @@ pub(crate) fn find_breakpoints(best_shift: &[i32], thr: i32) -> Vec<usize> {
     out
 }
 
+// ---------------- Pass B — phase-shift offset recovery ----------------
+//
+// For each Pass-A breakpoint, take a small window of rows on either
+// side, build the per-column mode profile, and cross-correlate the
+// two profiles **circularly** over `s ∈ [-w/2, +w/2]`. The argmax
+// shift is the phase-shift offset in bp.
+
+/// Recover the phase-shift offset between two wrap-row windows by
+/// circular cross-correlation of their column-mode profiles.
+///
+/// `prev_window` and `post_window` are flat row-major byte slices of
+/// length `width × rows_in_window` each. Returns the offset `s` (bp)
+/// such that the post-window aligns with the pre-window when shifted
+/// by `-s` (the conventional sign: positive `s` means the post-block
+/// "moved forward" by `s` bp relative to the pre-block).
+pub fn recover_offset(prev_window: &[u8], post_window: &[u8], width: usize) -> i32 {
+    if width < 4 || prev_window.len() < width || post_window.len() < width {
+        return 0;
+    }
+    let prev = mode_per_column(prev_window, width);
+    let post = mode_per_column(post_window, width);
+    let s_max = (width as i32) / 2;
+    let mut best: (i32, usize) = (0, count_matches_circular(&prev, &post, 0));
+    for mag in 1..=s_max {
+        for s in [-mag, mag] {
+            let m = count_matches_circular(&prev, &post, s);
+            if m > best.1 {
+                best = (s, m);
+            }
+        }
+    }
+    best.0
+}
+
+fn mode_per_column(window: &[u8], width: usize) -> Vec<u8> {
+    let n_rows = window.len() / width;
+    let mut out = vec![b'N'; width];
+    for c in 0..width {
+        let mut counts = [0usize; 5]; // A, C, G, T, N
+        for r in 0..n_rows {
+            let b = window[r * width + c];
+            let i = match b {
+                b'A' => 0,
+                b'C' => 1,
+                b'G' => 2,
+                b'T' => 3,
+                _ => 4,
+            };
+            counts[i] += 1;
+        }
+        let (max_i, _) = counts.iter().enumerate().max_by_key(|&(_, n)| *n).unwrap();
+        out[c] = match max_i {
+            0 => b'A',
+            1 => b'C',
+            2 => b'G',
+            3 => b'T',
+            _ => b'N',
+        };
+    }
+    out
+}
+
+fn count_matches_circular(prev: &[u8], post: &[u8], s: i32) -> usize {
+    let w = prev.len() as i32;
+    let mut matched = 0usize;
+    for c in 0..prev.len() {
+        let other = (c as i32 + s).rem_euclid(w) as usize;
+        if prev[c] == post[other] && prev[c] != b'N' {
+            matched += 1;
+        }
+    }
+    matched
+}
+
+/// Convenience: given a sequence and a list of `(width, breakpoint
+/// row indices)` pairs, recover one offset per breakpoint by taking
+/// the flanking `window_rows` rows on each side.
+pub fn recover_offsets_at_breakpoints(
+    seq: &[u8],
+    width: usize,
+    n_rows: usize,
+    breakpoints: &[usize],
+    window_rows: usize,
+) -> Vec<i32> {
+    let mut out = Vec::with_capacity(breakpoints.len());
+    for &b in breakpoints {
+        // Pass-A breakpoint at index `b` in best_shift means the
+        // transition is between row b and row b+1 in the wrap. (Recall
+        // best_shift[i] compares row i and row i+1.)
+        let pre_lo = b.saturating_sub(window_rows);
+        let pre_hi = b + 1; // exclusive
+        let post_lo = b + 1;
+        let post_hi = (post_lo + window_rows).min(n_rows);
+        if pre_hi - pre_lo < 2 || post_hi - post_lo < 2 {
+            out.push(0);
+            continue;
+        }
+        let prev = &seq[pre_lo * width..pre_hi * width];
+        let post = &seq[post_lo * width..post_hi * width];
+        out.push(recover_offset(prev, post, width));
+    }
+    out
+}
+
 /// FFT of detrended `best_shift`. Returns the period in bp = `width ×
 /// (n_rows / k)` for the bin with the largest magnitude (excluding
 /// DC and the trivial first lag). Returns `None` when no bin clears a
@@ -238,6 +342,47 @@ mod tests {
         let xs = vec![0, 1, 2, 1, 0];
         let bp = find_breakpoints(&xs, 3);
         assert!(bp.is_empty());
+    }
+
+    #[test]
+    fn recover_offset_identifies_known_shift() {
+        // Build a non-periodic 40 bp row, then a row that's a cyclic
+        // shift of it by exactly 7. Pass B should recover that shift.
+        let width = 40usize;
+        // Deterministic pseudo-random row using a fixed seed.
+        use rand::SeedableRng;
+        use rand::Rng;
+        use rand_chacha::ChaCha20Rng;
+        let mut rng = ChaCha20Rng::seed_from_u64(99);
+        let row_a: Vec<u8> = (0..width)
+            .map(|_| b"ACGT"[rng.random_range(0..4)])
+            .collect();
+        let shift_amount = 7i32;
+        let mut row_b = vec![0u8; width];
+        for i in 0..width {
+            row_b[i] = row_a[(i as i32 - shift_amount).rem_euclid(width as i32) as usize];
+        }
+        let rows = 20usize;
+        let pre: Vec<u8> = (0..rows).flat_map(|_| row_a.iter().copied()).collect();
+        let post: Vec<u8> = (0..rows).flat_map(|_| row_b.iter().copied()).collect();
+
+        let offset = recover_offset(&pre, &post, width);
+        // post[i] = pre[i - shift_amount] → at s = +shift_amount we
+        // compare pre[c] with post[c + shift_amount] = pre[c] → match.
+        // (Sign convention: positive s means post-block "moved forward".)
+        assert!(
+            offset == shift_amount || offset == -shift_amount,
+            "expected offset = ±{shift_amount}; got {offset}"
+        );
+    }
+
+    #[test]
+    fn recover_offset_zero_for_identical_windows() {
+        let width = 30usize;
+        let row: Vec<u8> = (0..width).map(|i| if i % 2 == 0 { b'A' } else { b'C' }).collect();
+        let win: Vec<u8> = (0..15).flat_map(|_| row.iter().copied()).collect();
+        let offset = recover_offset(&win, &win, width);
+        assert_eq!(offset, 0);
     }
 
     #[test]
