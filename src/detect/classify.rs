@@ -393,6 +393,9 @@ pub fn decide_array(
             n_complete_copies: Some(c.n_complete_copies),
             column_conservation: Some(c.column_conservation),
             phase_separation: Some(c.phase_separation),
+            // Review-2026-05-16 #5: this is R(1) (k-mer row
+            // similarity), not pairwise sequence identity. See
+            // doc comment on `Properties.inter_monomer_identity`.
             inter_monomer_identity: Some(c.r_lag1),
             reason: c.reason,
         };

@@ -77,6 +77,7 @@ fn run_detect(args: DetectArgs) -> Result<()> {
         &cfg,
         &viz_flags,
         args.allow_missing_periods,
+        args.allow_extra_periods,
     )?;
     info!(
         "detect: {} array(s), {} segment(s), {} width row(s); prefix {:?}",

@@ -4,17 +4,27 @@
 //!
 //! - `raster_w{w}.tsv`            — numeric wrapped matrix (0=A, 1=C, 2=G, 3=T, 4=N)
 //! - `raster_w{w}.png`            — same matrix, A/C/G/T colour-coded (feature `viz`)
-//! - `column_ic_w{w}.tsv`         — per-column IC at width w (always, cheap)
+//! - `column_ic_w{w}.tsv`         — per-column IC at width w
 //! - `rk_w{w}.tsv`                — R(k) curve for k = 1..K
 //! - `shift_w{w}.tsv`             — best_shift(r) signal
 //! - `column_edge_rate_w{w}.tsv`  — diff_y per column
+//! - `edge_matrix_w{w}.tsv`       — per-row diff_y bits (one row per (r, r+1) pair)
 //!
-//! Default behaviour: when `--viz-dir` is set, all "always" + "cheap"
-//! TSVs are written; PNGs (raster) only on `--export-raster` and edge
-//! matrices only on `--export-edges`. PNG requires the `viz` Cargo
-//! feature (default-on). A no-viz build accepts the flags at the CLI
-//! surface but returns a clear runtime error if a PNG path actually
-//! fires (per A7).
+//! Review-2026-05-16 #9 — flag semantics, made exact:
+//!
+//! - `--viz-dir` alone (no granular flags): writes every cheap TSV
+//!   (`column_ic`, `column_edge_rate`, `rk`, `shift`). This is the
+//!   documented back-compat default.
+//! - With any granular `--export-*` flag set, only the flagged
+//!   artefacts are written: each flag gates exactly one output.
+//!     - `--export-ic`     → `column_ic_w{w}.tsv`
+//!     - `--export-shift`  → `shift_w{w}.tsv` + `rk_w{w}.tsv`
+//!     - `--export-edges`  → `column_edge_rate_w{w}.tsv` + `edge_matrix_w{w}.tsv`
+//!     - `--export-raster` → `raster_w{w}.tsv` + `raster_w{w}.png`
+//!
+//! PNG requires the `viz` Cargo feature (default-on). A no-viz build
+//! accepts the flags at the CLI surface but returns a clear runtime
+//! error if a PNG path actually fires (per A7).
 
 use anyhow::{Context, Result};
 use std::fs::File;
@@ -45,6 +55,13 @@ impl VizFlags {
     pub fn dir(&self) -> Option<PathBuf> {
         self.viz_dir.clone()
     }
+
+    /// True iff any granular flag was explicitly set. When false,
+    /// `export()` falls back to the "all cheap TSVs" default.
+    /// Review-2026-05-16 #9.
+    pub fn granular_set(&self) -> bool {
+        self.export_raster || self.export_shift || self.export_edges || self.export_ic
+    }
 }
 
 /// Per-array bundle of inputs the viz layer needs. Builders inside
@@ -69,28 +86,52 @@ pub fn export(flags: &VizFlags, bundle: &VizBundle<'_>) -> Result<()> {
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("creating viz dir {:?}", dir))?;
 
-    // Always-on, cheap TSVs.
-    if let Some(ic) = bundle.column_ic {
-        write_one_d_tsv(&dir.join(format!("column_ic_w{}.tsv", bundle.width_bp)), ic, "ic")?;
+    // Review-2026-05-16 #9: each granular flag gates exactly one
+    // (or one bundle of) artefact. `--viz-dir` alone (no granular
+    // flags) → emit every cheap TSV (back-compat default).
+    let granular = flags.granular_set();
+    let emit_ic = !granular || flags.export_ic;
+    let emit_shift = !granular || flags.export_shift;
+    let emit_edges = !granular || flags.export_edges;
+
+    if emit_ic {
+        if let Some(ic) = bundle.column_ic {
+            write_one_d_tsv(&dir.join(format!("column_ic_w{}.tsv", bundle.width_bp)), ic, "ic")?;
+        }
     }
-    if let Some(rate) = bundle.column_edge_rate {
-        write_one_d_tsv(
-            &dir.join(format!("column_edge_rate_w{}.tsv", bundle.width_bp)),
-            rate,
-            "edge_rate",
-        )?;
+    if emit_edges {
+        if let Some(rate) = bundle.column_edge_rate {
+            write_one_d_tsv(
+                &dir.join(format!("column_edge_rate_w{}.tsv", bundle.width_bp)),
+                rate,
+                "edge_rate",
+            )?;
+        }
+        // `--export-edges` (explicit) also writes the per-row diff_y
+        // matrix the reviewer flagged as missing. Skipped in the
+        // "viz_dir alone" default so the back-compat output set
+        // stays cheap.
+        if flags.export_edges && bundle.n_rows >= 2 {
+            write_edge_matrix_tsv(
+                &dir.join(format!("edge_matrix_w{}.tsv", bundle.width_bp)),
+                bundle.seq,
+                bundle.width_bp,
+                bundle.n_rows,
+            )?;
+        }
     }
-    if let Some(r) = bundle.r_k {
-        write_one_d_tsv(&dir.join(format!("rk_w{}.tsv", bundle.width_bp)), r, "r_k")?;
-    }
-    if let Some(s) = bundle.best_shift {
-        write_shift_tsv(
-            &dir.join(format!("shift_w{}.tsv", bundle.width_bp)),
-            s,
-        )?;
+    if emit_shift {
+        if let Some(r) = bundle.r_k {
+            write_one_d_tsv(&dir.join(format!("rk_w{}.tsv", bundle.width_bp)), r, "r_k")?;
+        }
+        if let Some(s) = bundle.best_shift {
+            write_shift_tsv(
+                &dir.join(format!("shift_w{}.tsv", bundle.width_bp)),
+                s,
+            )?;
+        }
     }
 
-    // Granular flags.
     if flags.export_raster {
         write_raster_tsv(
             &dir.join(format!("raster_w{}.tsv", bundle.width_bp)),
@@ -104,6 +145,29 @@ pub fn export(flags: &VizFlags, bundle: &VizBundle<'_>) -> Result<()> {
             bundle.width_bp,
             bundle.n_rows,
         )?;
+    }
+    Ok(())
+}
+
+/// Per-row diff_y matrix: one row per (r, r+1) pair, one column per
+/// position c. `1` = bases differ, `0` = bases match. Empty if
+/// `n_rows < 2`.
+fn write_edge_matrix_tsv(path: &Path, seq: &[u8], width: usize, n_rows: usize) -> Result<()> {
+    let mut f = File::create(path).with_context(|| format!("creating {:?}", path))?;
+    write!(f, "# array width_bp={} n_pairs={} schema_version=1\npair", width, n_rows - 1)?;
+    for c in 0..width {
+        write!(f, "\tcol_{}", c)?;
+    }
+    writeln!(f)?;
+    for r in 0..n_rows - 1 {
+        write!(f, "{}", r)?;
+        let base = r * width;
+        let next = (r + 1) * width;
+        for c in 0..width {
+            let bit = (seq[base + c] != seq[next + c]) as u8;
+            write!(f, "\t{bit}")?;
+        }
+        writeln!(f)?;
     }
     Ok(())
 }
@@ -265,6 +329,75 @@ mod tests {
         };
         // No viz_dir means no I/O; just succeeds.
         export(&flags, &bundle).unwrap();
+    }
+
+    // Review-2026-05-16 #9: granular flags must gate their output.
+    #[test]
+    fn granular_export_only_writes_flagged_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let flags = VizFlags {
+            viz_dir: Some(dir.path().to_path_buf()),
+            export_ic: true,
+            ..Default::default()
+        };
+        let ic = [1.0, 2.0, 0.5];
+        let rate = [0.1, 0.2, 0.3];
+        let rk = [0.0, 0.8];
+        let shift = [0i32, 1];
+        let bundle = VizBundle {
+            array_id: "arr1",
+            width_bp: 8,
+            seq: b"ACGTACGT",
+            n_rows: 1,
+            column_ic: Some(&ic),
+            column_edge_rate: Some(&rate),
+            r_k: Some(&rk),
+            best_shift: Some(&shift),
+        };
+        export(&flags, &bundle).unwrap();
+        let base = dir.path().join("arr1");
+        assert!(base.join("column_ic_w8.tsv").exists(), "IC was flagged on");
+        assert!(
+            !base.join("column_edge_rate_w8.tsv").exists(),
+            "edge_rate was NOT flagged; should be absent under granular mode"
+        );
+        assert!(
+            !base.join("rk_w8.tsv").exists(),
+            "rk was NOT flagged"
+        );
+        assert!(
+            !base.join("shift_w8.tsv").exists(),
+            "shift was NOT flagged"
+        );
+    }
+
+    #[test]
+    fn export_edges_writes_edge_matrix() {
+        let dir = tempfile::tempdir().unwrap();
+        let flags = VizFlags {
+            viz_dir: Some(dir.path().to_path_buf()),
+            export_edges: true,
+            ..Default::default()
+        };
+        let rate = [0.5, 0.0, 1.0, 0.5];
+        let bundle = VizBundle {
+            array_id: "arr1",
+            width_bp: 4,
+            seq: b"ACGTAGGT", // 2 rows: ACGT vs AGGT → diffs at col 1,2
+            n_rows: 2,
+            column_ic: None,
+            column_edge_rate: Some(&rate),
+            r_k: None,
+            best_shift: None,
+        };
+        export(&flags, &bundle).unwrap();
+        let p = dir.path().join("arr1").join("edge_matrix_w4.tsv");
+        let s = std::fs::read_to_string(&p).unwrap();
+        // Header comment + column header + 1 pair row.
+        assert_eq!(s.lines().count(), 3);
+        let last = s.lines().last().unwrap();
+        // pair 0: ACGT vs AGGT → 0,1,1,0 at col 0..3
+        assert_eq!(last, "0\t0\t1\t1\t0");
     }
 
     #[cfg(feature = "viz")]

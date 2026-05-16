@@ -96,6 +96,51 @@ to where in this plan the change applied.
   `periods.tsv`.
 - **A14 — drop `ndarray`** (review §11). Affects §2. Row-major
   `Vec<u8>` + `(rows, cols)` is enough for M1–M3.
+- **A15 — review-2026-05-16 surgical fixes**
+  (`docs/reviews/detect_implementation_review_completed_2026-05-16.md`).
+  Affects §5 (pipeline), §10 (output schema notes), §8 (viz flags),
+  §7 (CLI), §6.11 (confidence):
+  - mixed/ambiguous decisions no longer inherit pre-decision
+    `base_width_bp`/`hor_k`/`hor_length_bp`/`column_conservation`/
+    `phase_separation`/`inter_monomer_identity`, and no consensus
+    or viz is emitted for them (review #1, high);
+  - irregularity demotion now exempts HOR cases whose dominant
+    abnormality is smooth wobble (`wobble_amplitude_bp / w ≥ 0.05`
+    AND no phase shifts) — those stay `HOR` with wobble flagged
+    in `reason` (review #4, high);
+  - `properties.tsv::inter_monomer_identity` documented as an
+    **approximation** carrying `R(1)` at base width (k-mer
+    composition similarity), not pairwise sequence identity
+    (review #5, medium);
+  - `properties.tsv::confidence` documented as a **heuristic
+    score, not a calibrated probability**; mixed/ambiguous now
+    derive logit from `n_complete_copies` + `n_phase_shifts`
+    rather than a class constant (review #6, medium);
+  - `periods.tsv::period_score` parsing is strict: empty,
+    malformed, NaN/infinite, and out-of-`[0,1]` values are hard
+    errors instead of being coerced to `0.0` (review #8, medium);
+  - viz flags made exact: `--viz-dir` alone emits all cheap TSVs
+    (back-compat); any granular flag switches to per-flag gating,
+    and `--export-edges` now also writes a per-row `edge_matrix`
+    TSV (review #9, medium);
+  - single-run `detect` now mirrors batch-mode DH11: periods rows
+    whose `array_id` matches no FASTA record are a hard error
+    unless `--allow-extra-periods` is set (review #11, low).
+- **A16 — deferred from review-2026-05-16** (high findings #2 + #3).
+  Not yet addressed; documented here so the trade-off is explicit:
+  - **Per-segment recompute (#2).** `segment::split()` still emits
+    boundary splits inheriting whole-array class/base_width/k.
+    A real implementation needs per-segment wrap, R(k), shift,
+    consensus, and stratification-threshold comparison
+    (`stratification_same_threshold` / `stratification_diff_threshold`
+    are already in `DetectorConfig` but inert). Planned for M7.
+  - **Same-width mixed detection (#3).** Today's mixed detection
+    relies on distinct high-score input periods or incompatible
+    candidate widths; same-width / same-`k` mixed families
+    (e.g., `mx_a200-08_b200-08_n050-050`) collapse to a single
+    HOR. Fix requires segment-level consensus identity comparison
+    using the stratification thresholds — strictly depends on the
+    per-segment recompute above. Planned for M7.
 
 ## 1. Scope, naming, language
 
@@ -842,6 +887,23 @@ inter_monomer_identity  confidence  n_segments  reason
 `mixed`, `ambiguous` it stays `NA`. Derived from `R(1)` at
 `base_width` after accounting for the embedding's similarity floor
 (per `detect_spec.md` §4).
+
+> **Note (A15).** Today's implementation publishes `R(1)` directly
+> as `inter_monomer_identity` — i.e., k-mer-composition row
+> similarity, NOT mean pairwise sequence identity between inferred
+> slot consensuses. The two values are correlated but not the same;
+> downstream consumers should treat this column as a regime
+> indicator rather than a calibrated biological identity. Schema
+> is frozen so the column stays; a future major version will rename
+> or recompute it.
+
+> **Note (A15).** `confidence` is a heuristic per-class signal-
+> quality score, NOT a calibrated probability. Wrong calls with
+> high `confidence` are not bugs — they reflect the score
+> reporting "the evidence for this class was strong" when the
+> class itself was misidentified upstream. For `mixed`/`ambiguous`,
+> `confidence` now varies with `n_complete_copies` and
+> `n_phase_shifts` instead of being a class constant.
 
 Schema is **frozen at M0**: every later milestone fills more columns
 with real values, but no column is added/removed after M0 lands

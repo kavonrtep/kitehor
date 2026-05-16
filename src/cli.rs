@@ -351,6 +351,10 @@ pub struct DetectArgs {
     /// Downgrade missing-periods errors to warnings (DH5).
     #[arg(long)]
     pub allow_missing_periods: bool,
+    /// Downgrade "periods TSV has rows whose array_id matches no
+    /// FASTA record" errors to warnings (Review-2026-05-16 #11).
+    #[arg(long)]
+    pub allow_extra_periods: bool,
     /// Number of rayon worker threads (0 = auto).
     #[arg(long, default_value_t = 0)]
     pub threads: usize,

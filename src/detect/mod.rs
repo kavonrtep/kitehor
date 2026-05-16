@@ -49,6 +49,7 @@ pub fn run_one(
     cfg: &DetectorConfig,
     viz_flags: &VizFlags,
     allow_missing_periods: bool,
+    allow_extra_periods: bool,
 ) -> Result<DetectorReport> {
     cfg.validate()?;
     let arrays = io::load_arrays(fasta)?;
@@ -62,6 +63,7 @@ pub fn run_one(
         periods_by_id,
         default_stem.as_deref(),
         allow_missing_periods,
+        allow_extra_periods,
     )?;
 
     let mut properties: Vec<Properties> = Vec::with_capacity(paired.len());
@@ -76,20 +78,29 @@ pub fn run_one(
         let mut new_segments = segment::split(&props);
         segments.append(&mut new_segments);
         // M5: build consensus + viz when we have a chosen base width.
-        if let Some(base_w) = props.base_width_bp {
-            if let Some(monomer) = consensus::consensus(&arr.seq, base_w) {
-                let hor_unit = props
-                    .hor_length_bp
-                    .and_then(|hu| consensus::consensus(&arr.seq, hu));
-                consensus_records.push(ConsensusRecord {
-                    array_id: arr.id.clone(),
-                    monomer,
-                    hor_unit,
-                    hor_k: props.hor_k,
-                });
-            }
-            if viz_flags.is_active() {
-                emit_viz(arr, base_w, cfg, viz_flags)?;
+        // Review-2026-05-16 #1: only emit for resolved classes so
+        // Mixed/Ambiguous don't leak a heuristic-width consensus into
+        // the output bundle.
+        let resolved = matches!(
+            props.class,
+            Class::SimpleTR | Class::HOR | Class::IrregularHOR
+        );
+        if resolved {
+            if let Some(base_w) = props.base_width_bp {
+                if let Some(monomer) = consensus::consensus(&arr.seq, base_w) {
+                    let hor_unit = props
+                        .hor_length_bp
+                        .and_then(|hu| consensus::consensus(&arr.seq, hu));
+                    consensus_records.push(ConsensusRecord {
+                        array_id: arr.id.clone(),
+                        monomer,
+                        hor_unit,
+                        hor_k: props.hor_k,
+                    });
+                }
+                if viz_flags.is_active() {
+                    emit_viz(arr, base_w, cfg, viz_flags)?;
+                }
             }
         }
         properties.push(props);
@@ -167,31 +178,81 @@ fn run_array_m4(
     let pre_decision_width = props_m35.base_width_bp;
     let decision = classify::decide_array(arr, pers, &widths, cfg);
 
-    // Copy decision fields into properties.
+    // Review-2026-05-16 #1: decision is authoritative for every
+    // class-defining field. For Mixed/Ambiguous, the classifier
+    // intentionally returns no base_width / k / IC / phase_sep —
+    // we must NOT silently fall back to the M3.5 heuristic width
+    // (publishing it produced misleading TSV rows like
+    // `mixed,base=100,k=NA`). Keep shift / wobble fields from
+    // M3.5 since they're computed independently and remain
+    // informative even when classification fails.
+    let is_resolved = matches!(
+        decision.class,
+        Class::SimpleTR | Class::HOR | Class::IrregularHOR
+    );
     props_m35.class = decision.class;
-    props_m35.base_width_bp = decision.base_width_bp.or(props_m35.base_width_bp);
-    props_m35.hor_k = decision.hor_k;
-    props_m35.hor_length_bp = decision.hor_length_bp;
-    props_m35.n_complete_copies = decision.n_complete_copies;
-    props_m35.column_conservation = decision.column_conservation;
-    props_m35.phase_separation = decision.phase_separation;
-    props_m35.inter_monomer_identity = decision.inter_monomer_identity;
+    if is_resolved {
+        props_m35.base_width_bp = decision.base_width_bp.or(props_m35.base_width_bp);
+        props_m35.hor_k = decision.hor_k;
+        props_m35.hor_length_bp = decision.hor_length_bp;
+        props_m35.n_complete_copies = decision.n_complete_copies;
+        props_m35.column_conservation = decision.column_conservation;
+        props_m35.phase_separation = decision.phase_separation;
+        props_m35.inter_monomer_identity = decision.inter_monomer_identity;
+    } else {
+        props_m35.base_width_bp = None;
+        props_m35.hor_k = None;
+        props_m35.hor_length_bp = None;
+        props_m35.n_complete_copies = decision.n_complete_copies;
+        props_m35.column_conservation = None;
+        props_m35.phase_separation = None;
+        props_m35.inter_monomer_identity = None;
+    }
     props_m35.reason = decision.reason;
 
     // DH3: copy irregularity_score from the chosen base_width's
     // width_features row. Demote HOR → irregular_HOR when the score
     // exceeds the calibrated threshold.
+    //
+    // Review-2026-05-16 #4: smooth wobble inflates block-level IC
+    // variance because per-block row alignment drifts with the
+    // wobble phase, even though the architecture is still a
+    // coherent HOR with a wobble property. Suppress the demotion
+    // when wobble_amplitude_bp dominates: large amplitude relative
+    // to the base width AND no detected phase_shifts (which would
+    // signal genuine architectural inconsistency).
     if let Some(bw) = props_m35.base_width_bp {
         if let Some(w) = widths.iter().find(|w| w.width_bp == bw) {
             props_m35.irregularity_score = w.irregularity_score;
             if matches!(props_m35.class, Class::HOR) {
                 if let Some(irr) = w.irregularity_score {
                     if irr >= cfg.irregularity_demote_threshold {
-                        props_m35.class = Class::IrregularHOR;
-                        props_m35.reason = format!(
-                            "{} (irregular_HOR — block-level IC variance {:.3} ≥ {:.3})",
-                            props_m35.reason, irr, cfg.irregularity_demote_threshold
-                        );
+                        // Wobble-dominance guard: high wobble (≥ 5%
+                        // of base width) + no phase shifts → keep
+                        // the HOR call, surface wobble as the
+                        // explanation rather than demoting.
+                        let wobble_frac = props_m35
+                            .wobble_amplitude_bp
+                            .map(|w_amp| w_amp.abs() / bw.max(1) as f64)
+                            .unwrap_or(0.0);
+                        let wobble_dominates = wobble_frac >= 0.05
+                            && props_m35.n_phase_shifts == 0;
+                        if !wobble_dominates {
+                            props_m35.class = Class::IrregularHOR;
+                            props_m35.reason = format!(
+                                "{} (irregular_HOR — block-level IC variance {:.3} ≥ {:.3})",
+                                props_m35.reason, irr, cfg.irregularity_demote_threshold
+                            );
+                        } else {
+                            props_m35.reason = format!(
+                                "{} (irregularity {:.3} attributed to wobble {:.1} bp / {} bp = {:.1}%; HOR retained)",
+                                props_m35.reason,
+                                irr,
+                                props_m35.wobble_amplitude_bp.unwrap_or(0.0),
+                                bw,
+                                100.0 * wobble_frac,
+                            );
+                        }
                     }
                 }
             }
@@ -445,7 +506,19 @@ pub fn run_batch(
     let n = pairs.len();
     pairs.par_iter().try_for_each(|(fa, pe, stem)| -> Result<()> {
         let prefix = out_dir.join(stem);
-        run_one(fa, pe, &prefix, cfg, viz_flags, allow_missing_periods).map(|_| ())
+        // Per-file invocations always pass `allow_extra_periods=true`
+        // here because the batch loop already checked symmetry at the
+        // directory level (`discover_pairs`).
+        run_one(
+            fa,
+            pe,
+            &prefix,
+            cfg,
+            viz_flags,
+            allow_missing_periods,
+            /*allow_extra_periods=*/ true,
+        )
+        .map(|_| ())
     })?;
     Ok(n)
 }

@@ -85,7 +85,35 @@ pub fn load_periods(path: &Path) -> Result<HashMap<String, Vec<PeriodCandidate>>
             .with_context(|| {
                 format!("row {} period_bp not an integer in {:?}", row_idx, path)
             })?;
-        let period_score: f64 = rec.get(i_score).unwrap_or("0").parse().unwrap_or(0.0);
+        // Review-2026-05-16 #8: strict parse. A malformed period_score
+        // silently becoming 0.0 lets typos in upstream periods files
+        // change candidate ranking and classification with no error.
+        // Require finite and in [0, 1].
+        let period_score_raw = rec.get(i_score).unwrap_or("").trim();
+        if period_score_raw.is_empty() {
+            anyhow::bail!(
+                "row {} period_score is empty in {:?}",
+                row_idx, path
+            );
+        }
+        let period_score: f64 = period_score_raw.parse().with_context(|| {
+            format!(
+                "row {} period_score `{}` is not a number in {:?}",
+                row_idx, period_score_raw, path
+            )
+        })?;
+        if !period_score.is_finite() {
+            anyhow::bail!(
+                "row {} period_score must be finite (got {}) in {:?}",
+                row_idx, period_score, path
+            );
+        }
+        if !(0.0..=1.0).contains(&period_score) {
+            anyhow::bail!(
+                "row {} period_score must be in [0, 1] (got {}) in {:?}",
+                row_idx, period_score, path
+            );
+        }
         let source = i_source
             .map(|i| rec.get(i).unwrap_or("").to_string())
             .unwrap_or_default();
@@ -129,11 +157,17 @@ pub fn load_periods(path: &Path) -> Result<HashMap<String, Vec<PeriodCandidate>>
 /// Pass `--allow-missing-periods` on the CLI to downgrade it to a
 /// warning (the array then runs with no candidate widths and ends up
 /// `ambiguous`).
+///
+/// When `allow_extra` is `false` (default), period rows whose
+/// `array_id` matches no FASTA record after consumption are a hard
+/// error too. Review-2026-05-16 #11: mirrors the batch-mode DH11
+/// check so a typo in `array_id` can't sit silently in a single-run.
 pub fn join_arrays_with_periods(
     arrays: Vec<ArrayRecord>,
     mut periods: HashMap<String, Vec<PeriodCandidate>>,
     default_array_id: Option<&str>,
     allow_missing: bool,
+    allow_extra: bool,
 ) -> Result<Vec<(ArrayRecord, Vec<PeriodCandidate>)>> {
     let mut out = Vec::with_capacity(arrays.len());
     for arr in arrays {
@@ -160,6 +194,26 @@ pub fn join_arrays_with_periods(
             }
         }
         out.push((arr, pers));
+    }
+    // Whatever array_ids remain in `periods` after the FASTA loop were
+    // never claimed. Drop the implicit empty-string bucket — it's how
+    // the single-record convention is signalled when no FASTA record
+    // matched by id but the default-stem lookup also failed.
+    periods.remove("");
+    if !periods.is_empty() {
+        let leftover: Vec<String> = periods.keys().cloned().collect();
+        if allow_extra {
+            log::warn!(
+                "periods TSV had {} array_id(s) with no matching FASTA record: {:?} (`--allow-extra-periods` is set)",
+                leftover.len(), leftover
+            );
+        } else {
+            anyhow::bail!(
+                "periods TSV contains {} array_id(s) with no matching FASTA record: {:?}; \
+                 pass `--allow-extra-periods` to downgrade to a warning",
+                leftover.len(), leftover
+            );
+        }
     }
     Ok(out)
 }
@@ -503,6 +557,110 @@ mod tests {
               a1\t171\n",
         ).unwrap();
         assert!(load_periods(&p).is_err());
+    }
+
+    // Review-2026-05-16 #8: strict parsing of period_score.
+    #[test]
+    fn periods_loader_rejects_malformed_score() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("bad.tsv");
+        std::fs::File::create(&p).unwrap().write_all(
+            b"array_id\tperiod_bp\tperiod_score\n\
+              a1\t171\tnot-a-number\n",
+        ).unwrap();
+        assert!(load_periods(&p).is_err());
+    }
+
+    #[test]
+    fn periods_loader_rejects_out_of_range_score() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("bad.tsv");
+        std::fs::File::create(&p).unwrap().write_all(
+            b"array_id\tperiod_bp\tperiod_score\n\
+              a1\t171\t1.5\n",
+        ).unwrap();
+        assert!(load_periods(&p).is_err());
+    }
+
+    #[test]
+    fn periods_loader_rejects_negative_score() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("bad.tsv");
+        std::fs::File::create(&p).unwrap().write_all(
+            b"array_id\tperiod_bp\tperiod_score\n\
+              a1\t171\t-0.1\n",
+        ).unwrap();
+        assert!(load_periods(&p).is_err());
+    }
+
+    #[test]
+    fn periods_loader_rejects_nonfinite_score() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("bad.tsv");
+        std::fs::File::create(&p).unwrap().write_all(
+            b"array_id\tperiod_bp\tperiod_score\n\
+              a1\t171\tNaN\n",
+        ).unwrap();
+        assert!(load_periods(&p).is_err());
+    }
+
+    #[test]
+    fn periods_loader_rejects_empty_score() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("bad.tsv");
+        std::fs::File::create(&p).unwrap().write_all(
+            b"array_id\tperiod_bp\tperiod_score\n\
+              a1\t171\t\n",
+        ).unwrap();
+        assert!(load_periods(&p).is_err());
+    }
+
+    // Review-2026-05-16 #11: extra periods (no matching FASTA) is a
+    // hard error unless `allow_extra` is set.
+    #[test]
+    fn join_rejects_extra_periods_by_default() {
+        use crate::sequence::ArrayRecord;
+        let mut periods: HashMap<String, Vec<PeriodCandidate>> = HashMap::new();
+        periods.insert(
+            "stale".into(),
+            vec![PeriodCandidate {
+                array_id: "stale".into(),
+                period_bp: 171,
+                period_score: 0.9,
+                source: "true_base".into(),
+            }],
+        );
+        let arrays = vec![ArrayRecord {
+            id: "real".into(),
+            seq: b"ACGT".to_vec(),
+            length: 4,
+            n_count: 0,
+        }];
+        let r = join_arrays_with_periods(arrays, periods, None, true, false);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn join_allows_extra_periods_with_flag() {
+        use crate::sequence::ArrayRecord;
+        let mut periods: HashMap<String, Vec<PeriodCandidate>> = HashMap::new();
+        periods.insert(
+            "stale".into(),
+            vec![PeriodCandidate {
+                array_id: "stale".into(),
+                period_bp: 171,
+                period_score: 0.9,
+                source: "true_base".into(),
+            }],
+        );
+        let arrays = vec![ArrayRecord {
+            id: "real".into(),
+            seq: b"ACGT".to_vec(),
+            length: 4,
+            n_count: 0,
+        }];
+        let r = join_arrays_with_periods(arrays, periods, None, true, true);
+        assert!(r.is_ok());
     }
 
     fn dummy_widths() -> Vec<WidthFeatures> {

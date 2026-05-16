@@ -71,7 +71,18 @@ pub struct Properties {
     pub phase_shift_positions: Vec<usize>,
     pub phase_shift_offsets: Vec<i64>,
     pub irregularity_score: Option<f64>,
+    /// **Approximation.** Review-2026-05-16 #5: in the current
+    /// implementation this column carries `R(1)` at the chosen base
+    /// width — k-mer-composition row similarity, not pairwise
+    /// sequence identity between inferred slot consensuses. It is
+    /// useful as a regime indicator (≥ 0.95 in regime B, lower in
+    /// regime C) but should NOT be interpreted as a calibrated
+    /// biological identity. Schema is frozen at M0 so the field
+    /// name stays; a future major version will either rename it
+    /// or fill it with a real mean-pairwise-identity calculation.
     pub inter_monomer_identity: Option<f64>,
+    /// Heuristic confidence score, not a calibrated probability.
+    /// Review-2026-05-16 #6.
     pub confidence: Option<f64>,
     pub n_segments: usize,
     pub reason: String,
