@@ -383,7 +383,8 @@ mod tests {
         let bundle = VizBundle {
             array_id: "arr1",
             width_bp: 4,
-            seq: b"ACGTAGGT", // 2 rows: ACGT vs AGGT → diffs at col 1,2
+            // 2 rows: ACGT vs ATCT — diffs at col 1 (C/T) and col 2 (G/C).
+            seq: b"ACGTATCT",
             n_rows: 2,
             column_ic: None,
             column_edge_rate: Some(&rate),
@@ -396,7 +397,7 @@ mod tests {
         // Header comment + column header + 1 pair row.
         assert_eq!(s.lines().count(), 3);
         let last = s.lines().last().unwrap();
-        // pair 0: ACGT vs AGGT → 0,1,1,0 at col 0..3
+        // pair 0: ACGT vs ATCT → 0,1,1,0 at col 0..3
         assert_eq!(last, "0\t0\t1\t1\t0");
     }
 
