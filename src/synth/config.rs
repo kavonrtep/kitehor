@@ -2,11 +2,16 @@
 //!
 //! Validation layers (in order):
 //!
-//! 1. **Structural** — serde with `deny_unknown_fields` everywhere
-//!    rejects typos, missing required fields, wrong types, and any
-//!    field not in the schema. This covers most of what the JSON
-//!    Schema would catch.
-//! 2. **MVP business rules** — `validate_mvp_invariants` enforces the
+//! 1. **JSON Schema** — `jsonschema` validates the parsed YAML
+//!    against the canonical embedded schema (`docs/new/simulator_schema.json`).
+//!    Catches type errors, range/pattern/minimum constraints, and
+//!    `oneOf` discriminated-union mismatches. This is the same schema
+//!    `synth-schema --print` emits, so `synth-validate` and the
+//!    contract are guaranteed to agree.
+//! 2. **Structural** — serde with `deny_unknown_fields` everywhere
+//!    deserialises into the Rust types and catches anything the schema
+//!    missed.
+//! 3. **MVP business rules** — `validate_mvp_invariants` enforces the
 //!    contract items the schema can't express:
 //!    - **A1**: every `post_generation` event names a `block` index
 //!      that points to a HOR/SIMPLE_TR block and whose copy range
@@ -16,10 +21,8 @@
 //!      SIMPLE_TR and `|offset_bp|` may not exceed
 //!      `monomer_length / 2`.
 //!    - **Q8**: `source: file` is rejected as not-implemented-in-MVP.
-//!
-//! The canonical JSON Schema (`docs/new/simulator_schema.json`) stays
-//! the source of truth for documentation and external tooling; this
-//! module is the runtime gate.
+//!    - **F4**: when `source: sequence`, the inline string length must
+//!      equal `monomer_length_bp` (and contain only ACGT).
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -241,7 +244,39 @@ pub fn load_and_validate(path: &Path) -> Result<Config, ConfigError> {
         path: path.to_owned(),
         source: e,
     })?;
-    let cfg: Config = serde_yaml::from_str(&text).map_err(|e| ConfigError::Yaml {
+
+    // 1. JSON Schema validation. Parse YAML into a `serde_yaml::Value`
+    //    first so we can also surface any parse error early; then
+    //    cross-walk to `serde_json::Value` for the schema engine.
+    let yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&text).map_err(|e| ConfigError::Yaml {
+            path: path.to_owned(),
+            source: e,
+        })?;
+    let json_value: serde_json::Value =
+        serde_json::to_value(&yaml_value).map_err(|e| {
+            ConfigError::Invariant(format!("YAML→JSON conversion failed: {e}"))
+        })?;
+    let schema: serde_json::Value =
+        serde_json::from_str(crate::synth::CANONICAL_SCHEMA)
+            .expect("embedded simulator.schema.json must be valid JSON");
+    let validator = jsonschema::validator_for(&schema)
+        .map_err(|e| ConfigError::Invariant(format!("schema compile failed: {e}")))?;
+    let errors: Vec<String> = validator
+        .iter_errors(&json_value)
+        .map(|e| format!("  at `{}`: {}", e.instance_path, e))
+        .collect();
+    if !errors.is_empty() {
+        return Err(ConfigError::Invariant(format!(
+            "JSON Schema validation failed ({} error{}):\n{}",
+            errors.len(),
+            if errors.len() == 1 { "" } else { "s" },
+            errors.join("\n")
+        )));
+    }
+
+    // 2. Typed deserialisation.
+    let cfg: Config = serde_yaml::from_value(yaml_value).map_err(|e| ConfigError::Yaml {
         path: path.to_owned(),
         source: e,
     })?;
@@ -251,6 +286,8 @@ pub fn load_and_validate(path: &Path) -> Result<Config, ConfigError> {
             cfg.schema_version
         )));
     }
+
+    // 3. MVP business rules (A1, A3, Q5, Q8, F4).
     validate_mvp_invariants(&cfg)?;
     Ok(cfg)
 }
@@ -258,14 +295,23 @@ pub fn load_and_validate(path: &Path) -> Result<Config, ConfigError> {
 fn validate_mvp_invariants(cfg: &Config) -> Result<(), ConfigError> {
     // Q8: source:file is not implemented in MVP. Reject explicitly
     // rather than silently letting generation fail later.
+    // F4: source:sequence requires an inline string of length equal to
+    //     monomer_length_bp (after uppercasing, A/C/G/T only — pattern
+    //     enforced by the schema).
     for (name, tpl) in &cfg.templates {
-        let (src, has_seq) = match tpl {
+        let (src, seq, monomer_length) = match tpl {
             Template::HOR_slots {
-                source, sequence, ..
-            } => (*source, sequence.is_some()),
+                source,
+                sequence,
+                monomer_length_bp,
+                ..
+            } => (*source, sequence.as_deref(), *monomer_length_bp),
             Template::monomer {
-                source, sequence, ..
-            } => (*source, sequence.is_some()),
+                source,
+                sequence,
+                monomer_length_bp,
+                ..
+            } => (*source, sequence.as_deref(), *monomer_length_bp),
         };
         if src == Source::File {
             return Err(ConfigError::Invariant(format!(
@@ -273,11 +319,21 @@ fn validate_mvp_invariants(cfg: &Config) -> Result<(), ConfigError> {
                 name
             )));
         }
-        if src == Source::Sequence && !has_seq {
-            return Err(ConfigError::Invariant(format!(
-                "template `{}`: source: sequence requires a `sequence` field",
-                name
-            )));
+        if src == Source::Sequence {
+            let s = seq.ok_or_else(|| {
+                ConfigError::Invariant(format!(
+                    "template `{}`: source: sequence requires a `sequence` field",
+                    name
+                ))
+            })?;
+            if s.len() != monomer_length {
+                return Err(ConfigError::Invariant(format!(
+                    "template `{}`: source: sequence length {} must equal monomer_length_bp {}",
+                    name,
+                    s.len(),
+                    monomer_length
+                )));
+            }
         }
     }
 
@@ -704,6 +760,125 @@ structure:
         let f = write_tmp(yaml);
         let err = load_and_validate(f.path()).unwrap_err();
         assert!(format!("{err}").contains("unknown template"));
+    }
+
+    #[test]
+    fn json_schema_rejects_mutation_rate_above_1() {
+        // F1: schema says `global.mutation_rate` is in [0, 1]; runtime
+        // must reject values above the bound.
+        let yaml = r#"
+schema_version: 1
+global:
+  mutation_rate: 1.5
+templates:
+  t:
+    type: HOR_slots
+    monomer_length_bp: 100
+    k: 4
+structure:
+  - type: HOR
+    template: t
+    n_copies: 10
+"#;
+        let f = write_tmp(yaml);
+        let err = load_and_validate(f.path()).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("Schema validation failed") || msg.contains("mutation_rate"),
+            "expected schema error mentioning mutation_rate; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn json_schema_rejects_k_below_2() {
+        // F1: HOR_slots requires k >= 2.
+        let yaml = r#"
+schema_version: 1
+templates:
+  t:
+    type: HOR_slots
+    monomer_length_bp: 100
+    k: 1
+structure:
+  - type: HOR
+    template: t
+    n_copies: 10
+"#;
+        let f = write_tmp(yaml);
+        assert!(load_and_validate(f.path()).is_err());
+    }
+
+    #[test]
+    fn json_schema_rejects_inline_sequence_with_non_acgt() {
+        // F1: schema's `sequence` pattern is ^[ACGTacgt]+$.
+        let yaml = r#"
+schema_version: 1
+templates:
+  t:
+    type: monomer
+    monomer_length_bp: 10
+    source: sequence
+    sequence: "ACGTXNNNNN"
+structure:
+  - type: SIMPLE_TR
+    template: t
+    n_copies: 5
+"#;
+        let f = write_tmp(yaml);
+        assert!(load_and_validate(f.path()).is_err());
+    }
+
+    #[test]
+    fn json_schema_rejects_empty_structure() {
+        // F1: schema's structure has minItems=1.
+        let yaml = r#"
+schema_version: 1
+templates: {}
+structure: []
+"#;
+        let f = write_tmp(yaml);
+        assert!(load_and_validate(f.path()).is_err());
+    }
+
+    #[test]
+    fn inline_sequence_wrong_length_rejected() {
+        // F4: sequence length must equal monomer_length_bp.
+        let yaml = r#"
+schema_version: 1
+templates:
+  t:
+    type: monomer
+    monomer_length_bp: 10
+    source: sequence
+    sequence: "ACGTACGT"
+structure:
+  - type: SIMPLE_TR
+    template: t
+    n_copies: 5
+"#;
+        let f = write_tmp(yaml);
+        let err = load_and_validate(f.path()).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("must equal monomer_length_bp"), "got: {msg}");
+    }
+
+    #[test]
+    fn inline_sequence_correct_length_accepted() {
+        let yaml = r#"
+schema_version: 1
+templates:
+  t:
+    type: monomer
+    monomer_length_bp: 10
+    source: sequence
+    sequence: "ACGTACGTAC"
+structure:
+  - type: SIMPLE_TR
+    template: t
+    n_copies: 5
+"#;
+        let f = write_tmp(yaml);
+        load_and_validate(f.path()).unwrap();
     }
 
     #[test]

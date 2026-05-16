@@ -23,8 +23,12 @@ use std::collections::HashMap;
 pub struct InstantiatedTemplate {
     /// One Vec per slot. `slots[0]` is slot 1 in the YAML's 1-indexing.
     pub slots: Vec<Vec<u8>>,
-    /// Mean pairwise divergence between slot 1 and each of slots 2..k.
-    /// 0.0 for monomer templates (k=1).
+    /// Mean pairwise divergence across all `C(k, 2)` unordered slot
+    /// pairs — i.e. the same metric the upstream `inter_slot_divergence`
+    /// targets. Approximately equal to `inter_slot_divergence` in the
+    /// large-k limit; somewhat lower for small k because the derived
+    /// slots all share slot 1 as a common ancestor (see F5 in the
+    /// implementation review).
     pub realised_inter_slot_divergence: f64,
 }
 
@@ -139,16 +143,23 @@ fn instantiate_hor_slots(
         slots.push(mutate(&slot1, rate, rng));
     }
     let realised = if k >= 2 {
+        // F5: mean over all unordered slot pairs, matching the upstream
+        // definition of inter_slot_divergence.
         let mut sum = 0.0;
-        for s in &slots[1..] {
-            let diffs = slots[0]
-                .iter()
-                .zip(s.iter())
-                .filter(|(a, b)| a != b)
-                .count();
-            sum += diffs as f64 / slots[0].len() as f64;
+        let mut pair_count = 0usize;
+        let slot_len = slots[0].len() as f64;
+        for i in 0..slots.len() {
+            for j in (i + 1)..slots.len() {
+                let diffs = slots[i]
+                    .iter()
+                    .zip(slots[j].iter())
+                    .filter(|(a, b)| a != b)
+                    .count();
+                sum += diffs as f64 / slot_len;
+                pair_count += 1;
+            }
         }
-        sum / (k - 1) as f64
+        sum / pair_count as f64
     } else {
         0.0
     };
@@ -234,31 +245,36 @@ mod tests {
 
     #[test]
     fn realised_divergence_in_band() {
-        // Target d=0.15. Realised expected: k indep. draws at rate
-        // d/2 means each slot differs from slot1 at rate ~d/2 — but the
-        // metric is pairwise (slot1 vs slot_i) at rate d/2.
+        // F5: realised metric is mean pairwise across C(k, 2) pairs.
         //
-        // Wait — that's d/2, not d. Let me re-check.
+        // Mutating slot 1 at rate d/2 to derive slots 2..k gives:
+        //   slot 1 ↔ slot_i           : rate d/2  ((k-1) pairs)
+        //   slot_i ↔ slot_j (i, j ≠ 1) : rate d   (C(k-1, 2) pairs)
         //
-        // The plan §6.2: mutate slot 1 at rate d/2 — produces slot_i
-        // that differs from slot 1 at rate d/2 (not d). The plan calls
-        // d the "inter-slot divergence" which the upstream
-        // simulator_plan.md §4.3 defines as the rate at which slot 2
-        // differs from slot 1.
+        // Mean over all C(k, 2) = k(k-1)/2 pairs:
+        //   E[d_realised] = ((k-1)(d/2) + (k-1)(k-2)/2 · d) / (k(k-1)/2)
+        //                 = d · (1/k + (k-2)/k)
+        //                 = d · (k-1)/k
         //
-        // The conventional definition is that d is the pairwise
-        // divergence between *any two* slots, and that is ~ d when
-        // slot1↔slot_i is at d/2 *and* slot_i↔slot_j go through slot1
-        // at independent draws giving 2*(d/2) = d on average.
-        //
-        // Our `realised_inter_slot_divergence` measures slot1 vs
-        // slot_i, which is at rate d/2. So the test band is centred on
-        // d/2, not d.
+        // For k=8, d=0.20 → E ≈ 0.175.
         let t = one_hor_slots(1000, 8, 0.5, 0.20, 99);
         let d = t.realised_inter_slot_divergence;
+        let expected = 0.20 * 7.0 / 8.0;
         assert!(
-            d > 0.05 && d < 0.15,
-            "expected realised slot1-vs-slot_i divergence ~ d/2 (=0.10) +- 0.05; got {d}"
+            (d - expected).abs() < 0.03,
+            "expected realised mean pairwise ≈ {expected} ± 0.03; got {d}"
+        );
+    }
+
+    #[test]
+    fn realised_divergence_approaches_d_for_large_k() {
+        // Sanity check: at k=16, realised ≈ d · 15/16 ≈ 0.94 d.
+        let t = one_hor_slots(2000, 16, 0.5, 0.10, 5);
+        let d = t.realised_inter_slot_divergence;
+        let expected = 0.10 * 15.0 / 16.0;
+        assert!(
+            (d - expected).abs() < 0.02,
+            "expected realised ≈ {expected} ± 0.02; got {d}"
         );
     }
 

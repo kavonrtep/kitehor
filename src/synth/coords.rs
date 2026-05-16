@@ -29,6 +29,39 @@ pub struct CoordMap {
     pub entries: Vec<CoordEntry>,
 }
 
+/// Apply the same indel rule that `CoordMap::apply_indels` uses to a
+/// single `(start, len)` span. Returns the updated `(start, len)`.
+///
+/// Shared with `wobble`, `noise`, and `events` so every stage updates
+/// `filler_spans` consistently with `coord_map`. See F3 in the synth
+/// implementation review.
+pub fn apply_indels_to_span(start: usize, len: usize, indels: &[(usize, i32)]) -> (usize, usize) {
+    let s = start;
+    let e = s + len;
+    let mut shift: i64 = 0;
+    let mut len_delta: i64 = 0;
+    for &(pos, delta) in indels {
+        if pos < s {
+            shift += delta as i64;
+        } else if pos < e {
+            len_delta += delta as i64;
+        }
+    }
+    let new_start = (s as i64 + shift) as usize;
+    let new_len = ((len as i64) + len_delta).max(0) as usize;
+    (new_start, new_len)
+}
+
+/// Shift a `(start, len)` span by `delta` if `start >= pos`. Mirrors
+/// `CoordMap::shift_after`.
+pub fn shift_span_after(start: usize, len: usize, pos: usize, delta: i64) -> (usize, usize) {
+    if start >= pos {
+        ((start as i64 + delta) as usize, len)
+    } else {
+        (start, len)
+    }
+}
+
 impl CoordMap {
     pub fn new() -> Self {
         Self::default()
@@ -58,6 +91,27 @@ impl CoordMap {
             .collect();
         v.sort_by_key(|e| (e.copy_idx, e.slot_idx));
         v
+    }
+
+    /// Shift entries that **start at or after** `pos` by `delta` bp.
+    /// Entries strictly before `pos` are untouched (including their length).
+    ///
+    /// Use this for **uncovered structural insertions** like
+    /// `DUPLICATION`: the inserted bytes are owned by an event log entry,
+    /// not by any existing coord entry, so the byte immediately after the
+    /// insertion (formerly at `pos`) belongs to a downstream entry that
+    /// must shift right rather than absorb the insertion.
+    ///
+    /// This is the policy split flagged in the synth review (F2): the
+    /// generic `apply_indels` treats an insertion at `entry.start` as
+    /// "inside" the entry (correct for noise/wobble byte-level edits),
+    /// but that policy corrupts coord ownership for structural fillers.
+    pub fn shift_after(&mut self, pos: usize, delta: i64) {
+        for e in &mut self.entries {
+            if e.realised_start_bp >= pos {
+                e.realised_start_bp = (e.realised_start_bp as i64 + delta) as usize;
+            }
+        }
     }
 
     /// Apply a list of `(position, delta)` indels to every entry.
@@ -207,6 +261,33 @@ mod tests {
         m.apply_indels(&[(100, -1)]);
         assert_eq!(m.entries[0].realised_start_bp, 100);
         assert_eq!(m.entries[0].realised_len_bp, 49);
+    }
+
+    #[test]
+    fn shift_after_does_not_extend_right_entry() {
+        // F2 regression: an uncovered insertion at pos == entry.start
+        // must SHIFT that entry right, not extend it. (Contrast with
+        // apply_indels which would extend.)
+        let mut m = CoordMap::new();
+        m.push(entry(0, 1, 1, 0, 100));
+        m.push(entry(0, 1, 2, 100, 100));
+        m.shift_after(100, 50);
+        assert_eq!(m.entries[0].realised_start_bp, 0);
+        assert_eq!(m.entries[0].realised_len_bp, 100);
+        assert_eq!(m.entries[1].realised_start_bp, 150);
+        assert_eq!(m.entries[1].realised_len_bp, 100); // length unchanged
+    }
+
+    #[test]
+    fn shift_after_leaves_entries_before_pos_untouched() {
+        let mut m = CoordMap::new();
+        m.push(entry(0, 1, 1, 0, 100));
+        m.push(entry(0, 1, 2, 100, 100));
+        m.push(entry(0, 1, 3, 200, 100));
+        m.shift_after(200, 50);
+        assert_eq!(m.entries[0].realised_start_bp, 0);
+        assert_eq!(m.entries[1].realised_start_bp, 100);
+        assert_eq!(m.entries[2].realised_start_bp, 250);
     }
 
     #[test]

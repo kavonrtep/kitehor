@@ -2,7 +2,7 @@
 name        = "kitehor"
 version     = "0.1.0"
 edition     = "2021"
-rust-version = "1.75"
+rust-version = "1.85"
 description = "Kite-first probabilistic Higher-Order Repeat (HOR) detector for tandem-repeat arrays"
 license     = "MIT OR Apache-2.0"
 readme      = "README.md"
@@ -40,6 +40,7 @@ serde_yaml  = "0.9"
 rand        = "0.9"
 rand_chacha = "0.9"
 rand_distr  = "0.5"
+jsonschema  = { version = "0.30", default-features = false }
 
 [dev-dependencies]
 proptest = "1"

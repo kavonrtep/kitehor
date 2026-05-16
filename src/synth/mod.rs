@@ -101,9 +101,17 @@ pub fn run_one(
 
 /// Iterate every `*.yaml` under `config_dir` (skipping `.deferred.yaml`),
 /// run `run_one` for each in parallel via rayon, and write outputs to
-/// `out_dir/<stem>.*`. Per-config seed is derived as `seed_offset XOR
-/// fnv1a(filename)` so different files produce different sequences
-/// while a fixed `seed_offset` keeps the corpus byte-reproducible.
+/// `out_dir/<stem>.*`.
+///
+/// **Seed policy (F6)**:
+/// - `seed_offset == 0` (default): respect each YAML's `seed:` value.
+///   This is the right choice when the corpus is itself the source of
+///   truth (e.g. the 1,600-case `ground_truth_v2/` configs, where the
+///   generator already derives a deterministic per-file seed).
+/// - `seed_offset != 0`: derive a per-file override as
+///   `cfg_seed XOR fnv1a(stem) XOR seed_offset`, so re-running with a
+///   different offset reshuffles every case while staying
+///   deterministic for any fixed offset.
 ///
 /// Returns the number of configs successfully run.
 pub fn run_batch(
@@ -117,10 +125,32 @@ pub fn run_batch(
     configs.par_iter().try_for_each(|p| -> Result<()> {
         let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("array");
         let prefix = out_dir.join(stem);
-        let per_seed = rng::derive(seed_offset, stem);
-        run_one(p, &prefix, Some(per_seed), diagnostics)
+        let seed_override = if seed_offset == 0 {
+            None
+        } else {
+            // Load the YAML enough to recover cfg.seed without doing
+            // the full validation twice — but run_one will validate
+            // anyway, so just parse the seed field cheaply here.
+            let cfg_seed = read_yaml_seed_field(p).unwrap_or(0);
+            Some(cfg_seed ^ rng::derive(0, stem) ^ seed_offset)
+        };
+        run_one(p, &prefix, seed_override, diagnostics)
     })?;
     Ok(configs.len())
+}
+
+/// Best-effort cheap read of `seed:` from a YAML file without parsing
+/// the whole config. Falls back to 0 if the field is absent or the
+/// file is unreadable; `run_one` will surface any real error.
+fn read_yaml_seed_field(p: &Path) -> Option<u64> {
+    let text = std::fs::read_to_string(p).ok()?;
+    for line in text.lines() {
+        let line = line.trim_start();
+        if let Some(rest) = line.strip_prefix("seed:") {
+            return rest.trim().parse::<u64>().ok();
+        }
+    }
+    None
 }
 
 fn discover_configs(dir: &Path) -> Result<Vec<PathBuf>> {

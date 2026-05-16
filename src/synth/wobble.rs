@@ -20,6 +20,7 @@
 
 use crate::synth::blocks::{FillerSpan, SimState};
 use crate::synth::config::{Block, Config, Modifier, Template, WobbleModel};
+use crate::synth::coords::apply_indels_to_span;
 use anyhow::{bail, Result};
 use rand::Rng;
 use rand_chacha::ChaCha20Rng;
@@ -160,19 +161,9 @@ fn apply_one(
 
 fn apply_to_fillers(fillers: &mut [FillerSpan], indels: &[(usize, i32)]) {
     for fs in fillers.iter_mut() {
-        let s = fs.realised_start_bp;
-        let e = s + fs.realised_len_bp;
-        let mut shift: i64 = 0;
-        let mut len_delta: i64 = 0;
-        for &(pos, delta) in indels {
-            if pos < s {
-                shift += delta as i64;
-            } else if pos < e {
-                len_delta += delta as i64;
-            }
-        }
-        fs.realised_start_bp = (s as i64 + shift) as usize;
-        fs.realised_len_bp = ((fs.realised_len_bp as i64) + len_delta).max(0) as usize;
+        let (s, l) = apply_indels_to_span(fs.realised_start_bp, fs.realised_len_bp, indels);
+        fs.realised_start_bp = s;
+        fs.realised_len_bp = l;
     }
 }
 

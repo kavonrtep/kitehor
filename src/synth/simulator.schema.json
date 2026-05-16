@@ -139,11 +139,11 @@
       },
       "allOf": [
         {
-          "if": {"properties": {"source": {"const": "sequence"}}},
+          "if": {"required": ["source"], "properties": {"source": {"const": "sequence"}}},
           "then": {"required": ["sequence"]}
         },
         {
-          "if": {"properties": {"source": {"const": "file"}}},
+          "if": {"required": ["source"], "properties": {"source": {"const": "file"}}},
           "then": {"required": ["file"]}
         }
       ]
@@ -163,11 +163,11 @@
       },
       "allOf": [
         {
-          "if": {"properties": {"source": {"const": "sequence"}}},
+          "if": {"required": ["source"], "properties": {"source": {"const": "sequence"}}},
           "then": {"required": ["sequence"]}
         },
         {
-          "if": {"properties": {"source": {"const": "file"}}},
+          "if": {"required": ["source"], "properties": {"source": {"const": "file"}}},
           "then": {"required": ["file"]}
         }
       ]

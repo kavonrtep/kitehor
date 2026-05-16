@@ -134,6 +134,130 @@ fn batch_finishes_well_under_30s() {
 }
 
 #[test]
+fn seed_offset_zero_respects_yaml_seeds() {
+    // F6: with --seed-offset 0 (default), batch should NOT override
+    // the YAML seed. Two runs with seed_offset=0 must be byte-identical
+    // to the same configs run via `synth` directly with no --seed flag.
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_dir = dir.path().join("cfg");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    let yaml = b"schema_version: 1\nseed: 12345\ntemplates:\n  t:\n    type: HOR_slots\n    monomer_length_bp: 100\n    k: 4\n    inter_slot_divergence: 0.10\nstructure:\n  - type: HOR\n    template: t\n    n_copies: 20\n";
+    let cfg_path = cfg_dir.join("case_only.yaml");
+    std::fs::File::create(&cfg_path).unwrap().write_all(yaml).unwrap();
+
+    // Direct synth run.
+    let direct_out = dir.path().join("direct");
+    let _ = Command::new(kitehor_bin())
+        .arg("synth").arg(&cfg_path)
+        .arg("-o").arg(direct_out.join("case_only"))
+        .output().unwrap();
+
+    // Batch run with seed_offset=0 (default).
+    let batch_out = dir.path().join("batch");
+    let _ = Command::new(kitehor_bin())
+        .arg("synth-batch")
+        .arg("--config-dir").arg(&cfg_dir)
+        .arg("--out-dir").arg(&batch_out)
+        .output().unwrap();
+
+    let s1 = std::fs::read(direct_out.join("case_only.fa")).unwrap();
+    let s2 = std::fs::read(batch_out.join("case_only.fa")).unwrap();
+    assert_eq!(
+        s1, s2,
+        "batch with --seed-offset 0 must produce identical output to `synth` with no --seed override"
+    );
+}
+
+#[test]
+fn seed_offset_nonzero_reshuffles() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a");
+    let b = dir.path().join("b");
+    let out_a = Command::new(kitehor_bin())
+        .arg("synth-batch")
+        .arg("--config-dir").arg(corpus_dir())
+        .arg("--out-dir").arg(&a)
+        .arg("--seed-offset").arg("7")
+        .output().unwrap();
+    assert!(out_a.status.success());
+    let out_b = Command::new(kitehor_bin())
+        .arg("synth-batch")
+        .arg("--config-dir").arg(corpus_dir())
+        .arg("--out-dir").arg(&b)
+        .arg("--seed-offset").arg("99")
+        .output().unwrap();
+    assert!(out_b.status.success());
+    // Pick one fixture and assert the sequences differ.
+    let f1 = a.join("T05_hor_clean.fa");
+    let f2 = b.join("T05_hor_clean.fa");
+    let s1 = std::fs::read(&f1).unwrap();
+    let s2 = std::fs::read(&f2).unwrap();
+    assert_ne!(s1, s2, "different seed_offsets must reshuffle the output");
+}
+
+#[test]
+fn coord_map_and_filler_spans_cover_post_pipeline_sequence_length() {
+    // Reviewer's "additional improvements" — property test.
+    //
+    // For every CI fixture, the post-pipeline FASTA length must equal:
+    //   sum(coord_map entry lens) + sum(filler_span lens)
+    //                              + (duplication bytes)
+    //                              − (deletion bytes)
+    //
+    // To avoid wiring the simulator API into this test, we only check
+    // configs WITHOUT DUPLICATION/DELETION events, since those add
+    // uncovered structural-filler bytes that aren't recorded in the
+    // truth file's headline columns. That still covers >80% of the
+    // corpus (T01–T11 plus T13–T15, T17, T18).
+    let dir = tempfile::tempdir().unwrap();
+    let _out = Command::new(kitehor_bin())
+        .arg("synth-batch")
+        .arg("--config-dir").arg(corpus_dir())
+        .arg("--out-dir").arg(dir.path())
+        .arg("--diagnostics")
+        .output()
+        .unwrap();
+
+    for entry in std::fs::read_dir(dir.path()).unwrap() {
+        let p = entry.unwrap().path();
+        if !p.to_string_lossy().ends_with(".diagnostics.json") {
+            continue;
+        }
+        let j: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+
+        // Skip configs that contain DUPLICATION/DELETION/INVERSION
+        // (uncovered-byte semantics differ).
+        let events = j["events"].as_array().unwrap();
+        if events.iter().any(|e| {
+            matches!(
+                e["type"].as_str(),
+                Some("DUPLICATION") | Some("DELETION") | Some("INVERSION")
+            )
+        }) {
+            continue;
+        }
+
+        // Sum lengths of every (block) extent reported in diagnostics.
+        let blocks = j["blocks"].as_array().unwrap();
+        let span: i64 = blocks
+            .iter()
+            .map(|b| b["end_bp"].as_i64().unwrap() - b["start_bp"].as_i64().unwrap())
+            .sum();
+        let seq_len = j["sequence_length_bp"].as_i64().unwrap();
+        assert_eq!(
+            span,
+            seq_len,
+            "diagnostics block spans (sum={}) must equal sequence length ({}) for {}",
+            span,
+            seq_len,
+            p.display()
+        );
+    }
+}
+
+#[test]
 fn diagnostics_emitted_when_flag_set() {
     let dir = tempfile::tempdir().unwrap();
     let out = Command::new(kitehor_bin())

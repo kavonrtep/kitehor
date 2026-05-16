@@ -27,6 +27,7 @@
 
 use crate::synth::blocks::SimState;
 use crate::synth::config::{Block, Config, Event};
+use crate::synth::coords::{apply_indels_to_span, shift_span_after};
 use crate::synth::templates::InstantiatedTemplate;
 use anyhow::{anyhow, bail, Result};
 use rand_chacha::ChaCha20Rng;
@@ -35,20 +36,24 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub enum EventLog {
     Hybrid {
+        block: usize,
         at_bp: usize,
         copy: usize,
         slot: usize,
         source_slots: [usize; 2],
     },
     Inversion {
+        block: usize,
         start_bp: usize,
         length_bp: usize,
     },
     Duplication {
+        block: usize,
         start_bp: usize,
         length_bp: usize,
     },
     Deletion {
+        block: usize,
         start_bp: usize,
         length_bp: usize,
     },
@@ -141,6 +146,7 @@ fn apply_hybrid(
     state.sequence[entry.realised_start_bp..entry.realised_start_bp + entry.realised_len_bp]
         .copy_from_slice(&chimera);
     Ok(EventLog::Hybrid {
+        block,
         at_bp: entry.realised_start_bp,
         copy: at_copy,
         slot,
@@ -171,6 +177,7 @@ fn apply_inversion(
         }
     }
     Ok(EventLog::Inversion {
+        block,
         start_bp,
         length_bp: len,
     })
@@ -186,13 +193,15 @@ fn apply_duplication(
     let len = end_bp - start_bp;
     let dup: Vec<u8> = state.sequence[start_bp..end_bp].to_vec();
     state.sequence.splice(end_bp..end_bp, dup);
-    // Apply +1 indels at position end_bp, `len` of them, to shift
-    // every entry whose start >= end_bp by +len. Entries fully inside
-    // [start_bp, end_bp) are unchanged (they're the original copies).
-    let indels: Vec<(usize, i32)> = (0..len).map(|_| (end_bp, 1)).collect();
-    state.coord_map.apply_indels(&indels);
-    apply_to_fillers(state, &indels);
+    // F2: the duplicated bytes are an *uncovered* structural filler.
+    // Entries at or past `end_bp` must shift right by `len`; entries
+    // wholly inside `[start_bp, end_bp)` (the original copies) are
+    // untouched. Using `apply_indels` here would incorrectly absorb
+    // the duplicate into whichever entry starts at `end_bp`.
+    state.coord_map.shift_after(end_bp, len as i64);
+    shift_fillers_after(state, end_bp, len as i64);
     Ok(EventLog::Duplication {
+        block,
         start_bp,
         length_bp: len,
     })
@@ -211,6 +220,7 @@ fn apply_deletion(
     state.coord_map.apply_indels(&indels);
     apply_to_fillers(state, &indels);
     Ok(EventLog::Deletion {
+        block,
         start_bp,
         length_bp: len,
     })
@@ -218,19 +228,17 @@ fn apply_deletion(
 
 fn apply_to_fillers(state: &mut SimState, indels: &[(usize, i32)]) {
     for fs in state.filler_spans.iter_mut() {
-        let s = fs.realised_start_bp;
-        let e = s + fs.realised_len_bp;
-        let mut shift: i64 = 0;
-        let mut len_delta: i64 = 0;
-        for &(pos, delta) in indels {
-            if pos < s {
-                shift += delta as i64;
-            } else if pos < e {
-                len_delta += delta as i64;
-            }
-        }
-        fs.realised_start_bp = (s as i64 + shift) as usize;
-        fs.realised_len_bp = ((fs.realised_len_bp as i64) + len_delta).max(0) as usize;
+        let (s, l) = apply_indels_to_span(fs.realised_start_bp, fs.realised_len_bp, indels);
+        fs.realised_start_bp = s;
+        fs.realised_len_bp = l;
+    }
+}
+
+fn shift_fillers_after(state: &mut SimState, pos: usize, delta: i64) {
+    for fs in state.filler_spans.iter_mut() {
+        let (s, l) = shift_span_after(fs.realised_start_bp, fs.realised_len_bp, pos, delta);
+        fs.realised_start_bp = s;
+        fs.realised_len_bp = l;
     }
 }
 
@@ -296,31 +304,35 @@ pub fn to_events_json(logs: &[EventLog]) -> String {
         .iter()
         .map(|e| match e {
             EventLog::Hybrid {
+                block,
                 at_bp,
                 copy,
                 slot,
                 source_slots,
             } => format!(
-                r#"{{"type":"HYBRID","at_bp":{at_bp},"copy":{copy},"slot":{slot},"source_slots":[{},{}]}}"#,
+                r#"{{"type":"HYBRID","block":{block},"at_bp":{at_bp},"copy":{copy},"slot":{slot},"source_slots":[{},{}]}}"#,
                 source_slots[0], source_slots[1]
             ),
             EventLog::Inversion {
+                block,
                 start_bp,
                 length_bp,
             } => format!(
-                r#"{{"type":"INVERSION","start_bp":{start_bp},"length_bp":{length_bp}}}"#
+                r#"{{"type":"INVERSION","block":{block},"start_bp":{start_bp},"length_bp":{length_bp}}}"#
             ),
             EventLog::Duplication {
+                block,
                 start_bp,
                 length_bp,
             } => format!(
-                r#"{{"type":"DUPLICATION","start_bp":{start_bp},"length_bp":{length_bp}}}"#
+                r#"{{"type":"DUPLICATION","block":{block},"start_bp":{start_bp},"length_bp":{length_bp}}}"#
             ),
             EventLog::Deletion {
+                block,
                 start_bp,
                 length_bp,
             } => format!(
-                r#"{{"type":"DELETION","start_bp":{start_bp},"length_bp":{length_bp}}}"#
+                r#"{{"type":"DELETION","block":{block},"start_bp":{start_bp},"length_bp":{length_bp}}}"#
             ),
         })
         .collect();
@@ -414,11 +426,13 @@ post_generation:
         // Event log
         match &logs[0] {
             EventLog::Hybrid {
+                block,
                 at_bp,
                 copy,
                 slot,
                 source_slots,
             } => {
+                assert_eq!(*block, 0);
                 assert_eq!(*at_bp, entry_before.realised_start_bp);
                 assert_eq!(*copy, 27);
                 assert_eq!(*slot, 3);
@@ -457,9 +471,11 @@ post_generation:
         assert_eq!(state.sequence.len(), pre_len);
         match &logs[0] {
             EventLog::Inversion {
+                block,
                 start_bp,
                 length_bp,
             } => {
+                assert_eq!(*block, 0);
                 // copy 11..21, each 4 slots × 100 bp = 4000 bp.
                 assert_eq!(*length_bp, 4000);
                 assert_eq!(*start_bp, 10 * 4 * 100);
@@ -577,20 +593,24 @@ post_generation:
     fn events_json_round_trip() {
         let logs = vec![
             EventLog::Hybrid {
+                block: 0,
                 at_bp: 1234,
                 copy: 27,
                 slot: 4,
                 source_slots: [4, 5],
             },
             EventLog::Inversion {
+                block: 1,
                 start_bp: 10_000,
                 length_bp: 4000,
             },
             EventLog::Duplication {
+                block: 0,
                 start_bp: 50_000,
                 length_bp: 2000,
             },
             EventLog::Deletion {
+                block: 2,
                 start_bp: 60_000,
                 length_bp: 1000,
             },
@@ -599,10 +619,118 @@ post_generation:
         let v: serde_json::Value = serde_json::from_str(&j).expect("emit valid JSON");
         assert_eq!(v.as_array().unwrap().len(), 4);
         assert_eq!(v[0]["type"], "HYBRID");
+        assert_eq!(v[0]["block"], 0);
         assert_eq!(v[0]["copy"], 27);
         assert_eq!(v[1]["type"], "INVERSION");
+        assert_eq!(v[1]["block"], 1);
         assert_eq!(v[2]["type"], "DUPLICATION");
+        assert_eq!(v[2]["block"], 0);
         assert_eq!(v[3]["type"], "DELETION");
+        assert_eq!(v[3]["block"], 2);
+    }
+
+    #[test]
+    fn duplication_downstream_entries_shift_not_extend() {
+        // F2 regression: reviewer's explicit ask — duplicate copies 20..24,
+        // assert copy 25 starts at old_end_bp + duplicated_len.
+        let cfg = parse(
+            r#"
+schema_version: 1
+templates:
+  t:
+    type: HOR_slots
+    monomer_length_bp: 100
+    k: 4
+    inter_slot_divergence: 0.15
+structure:
+  - type: HOR
+    template: t
+    n_copies: 50
+post_generation:
+  - type: DUPLICATION
+    block: 0
+    start_copy: 20
+    length_copies: 5
+"#,
+        );
+        let (mut state, inst) = build_state(&cfg);
+        // Capture pre-event coords.
+        let copy25_pre = *state.coord_map.find(0, 25, 1).unwrap();
+        let dup_end_pre = state.coord_map.find(0, 24, 4).unwrap().end_bp(); // == copy25_pre.start
+        assert_eq!(copy25_pre.realised_start_bp, dup_end_pre);
+
+        let mut rng = Streams::new(1).events();
+        apply(&mut state, &cfg.post_generation, &cfg, &inst, &mut rng).unwrap();
+
+        // 5 copies × 4 slots × 100 bp = 2000 bp duplicated.
+        let dup_len = 5 * 4 * 100;
+        let copy25_post = state.coord_map.find(0, 25, 1).unwrap();
+        assert_eq!(
+            copy25_post.realised_start_bp,
+            dup_end_pre + dup_len,
+            "copy 25 must shift past the duplicated region, not absorb it"
+        );
+        assert_eq!(
+            copy25_post.realised_len_bp, 100,
+            "copy 25 length must NOT grow"
+        );
+        // And copy 20 (first of the duplicated range) stays at its
+        // original position.
+        let copy20_post = state.coord_map.find(0, 20, 1).unwrap();
+        assert_eq!(copy20_post.realised_start_bp, 19 * 4 * 100);
+    }
+
+    #[test]
+    fn event_chain_dup_then_inv_then_del_keeps_coords_consistent() {
+        // Reviewer's "additional improvements" ask: chain events with
+        // coordinates downstream of each prior event and verify the
+        // running coord_map still resolves logical (block, copy, slot)
+        // to valid byte ranges.
+        let cfg = parse(
+            r#"
+schema_version: 1
+templates:
+  t:
+    type: HOR_slots
+    monomer_length_bp: 100
+    k: 4
+    inter_slot_divergence: 0.15
+structure:
+  - type: HOR
+    template: t
+    n_copies: 100
+post_generation:
+  - type: DUPLICATION
+    block: 0
+    start_copy: 20
+    length_copies: 5
+  - type: INVERSION
+    block: 0
+    start_copy: 40
+    length_copies: 3
+  - type: DELETION
+    block: 0
+    start_copy: 80
+    length_copies: 2
+"#,
+        );
+        let (mut state, inst) = build_state(&cfg);
+        let pre_len = state.sequence.len();
+        let mut rng = Streams::new(1).events();
+        let logs = apply(&mut state, &cfg.post_generation, &cfg, &inst, &mut rng).unwrap();
+        // Final length = pre + dup - del = pre + 2000 - 800.
+        assert_eq!(state.sequence.len(), pre_len + 2000 - 800);
+        assert_eq!(logs.len(), 3);
+        // Every remaining (block, copy, slot) lookup must yield a span
+        // that lies entirely within the post-event sequence.
+        for entry in &state.coord_map.entries {
+            let e = entry.realised_start_bp + entry.realised_len_bp;
+            assert!(
+                e <= state.sequence.len(),
+                "coord entry {:?} extends past sequence (len={})",
+                entry, state.sequence.len()
+            );
+        }
     }
 
     #[test]
