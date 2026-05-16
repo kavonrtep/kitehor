@@ -42,6 +42,13 @@ pub enum Command {
     /// Run `synth` over every `*.yaml` in a directory (parallel).
     /// `.deferred.yaml` placeholders are skipped.
     SynthBatch(SynthBatchArgs),
+    /// v2 line-width detector. Reads FASTA + period candidates, emits
+    /// {PREFIX}.properties.tsv, .segments.tsv, .width_features.tsv.
+    /// M0 scaffolding — every property column is NA until M1+ lands.
+    Detect(DetectArgs),
+    /// Run `detect` over every `<stem>.fa` in a directory paired with
+    /// `<stem>.periods.tsv` (parallel).
+    DetectBatch(DetectBatchArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +314,63 @@ pub struct SynthArgs {
     /// Also emit PREFIX.diagnostics.json.
     #[arg(long)]
     pub diagnostics: bool,
+}
+
+// ---------------------------------------------------------------------------
+// detect / detect-batch (v2 line-width detector)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct DetectArgs {
+    /// Input FASTA (one or many records).
+    pub fasta: PathBuf,
+    /// Period candidates TSV (matches `kitehor synth` output schema).
+    #[arg(long)]
+    pub periods: PathBuf,
+    /// Output prefix; writes PREFIX.properties.tsv, .segments.tsv,
+    /// .width_features.tsv (header-only files for stages not yet
+    /// reached).
+    #[arg(short, long, required = true)]
+    pub out: PathBuf,
+    /// Override default DetectorConfig via TOML.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+    /// Per-array matrix/signal export directory (M5).
+    #[arg(long)]
+    pub viz_dir: Option<PathBuf>,
+    /// Granular viz flags (M5).
+    #[arg(long)]
+    pub export_raster: bool,
+    #[arg(long)]
+    pub export_shift: bool,
+    #[arg(long)]
+    pub export_edges: bool,
+    #[arg(long)]
+    pub export_ic: bool,
+    /// Number of rayon worker threads (0 = auto).
+    #[arg(long, default_value_t = 0)]
+    pub threads: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct DetectBatchArgs {
+    /// Directory of FASTA files (`<stem>.fa`).
+    #[arg(long)]
+    pub fasta_dir: PathBuf,
+    /// Directory of period TSVs (`<stem>.periods.tsv`).
+    #[arg(long)]
+    pub periods_dir: PathBuf,
+    /// Output directory. Each `<stem>` produces `<stem>.{properties,segments,width_features}.tsv`.
+    #[arg(long)]
+    pub out_dir: PathBuf,
+    /// Override default DetectorConfig via TOML.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+    /// Per-array matrix/signal export directory (M5).
+    #[arg(long)]
+    pub viz_dir: Option<PathBuf>,
+    #[arg(long, default_value_t = 0)]
+    pub threads: usize,
 }
 
 #[derive(Debug, Args)]

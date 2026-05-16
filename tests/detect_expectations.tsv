@@ -1,0 +1,23 @@
+array_id	expected_class	expected_base_width_bp	expected_hor_k	base_width_tol_bp	expected_reason_contains	notes
+T01_simple_tr	simple_TR	170	NA	3		baseline simple TR
+T02_simple_tr_indel	simple_TR	170	NA	3		simple TR with indels
+T03_wobble_aperiodic	simple_TR	170	NA	5		wobble is a property; class unchanged
+T04_wobble_periodic	simple_TR	100	NA	5		sinusoidal wobble period_rows=500
+T05_hor_clean	HOR	171	12	3		canonical clean HOR
+T06_regime_A	simple_TR	170	NA	3	regime A	HOR with div=0 collapses to simple_TR at base
+T07_regime_C	simple_TR	680	NA	3	regime C	HOR with div=0.70; detector calls simple_TR at HOR-unit width (170×4)
+T08a_div_0.00	simple_TR	170	NA	3	regime A	sweep: div=0
+T08b_div_0.05	HOR	170	4	3		sweep: div=0.05 (regime B boundary)
+T08c_div_0.15	HOR	170	4	3		sweep: div=0.15 (clean regime B)
+T08d_div_0.35	HOR	170	4	3		sweep: div=0.35
+T08e_div_0.55	HOR	170	4	3		sweep: div=0.55 (regime B/C boundary)
+T08f_div_0.70	simple_TR	680	NA	3	regime C	sweep: div=0.70 → collapses
+T10_phase_shift	HOR	171	12	3		one phase shift; class unchanged
+T11_insertion	HOR	171	12	3		retro_like insertion is a property
+T12_inversion	irregular_HOR	171	12	3		OQ3 — strand-aware recognition deferred; expect irregular/ambiguous
+T13_coexisting_periods	mixed	NA	NA	3		two HOR blocks with different L/k
+T14_mixed_families	mixed	NA	NA	3		two SIMPLE_TR blocks with different L
+T15_stratification	simple_TR	170	NA	3		same period both strata; consensus difference is a property
+T16_hybrid	HOR	171	12	3		single chimeric monomer; class unchanged
+T17_random_negative	ambiguous	NA	NA	0		negative control: no repeat structure
+T18_at_rich	simple_TR	170	NA	3		AT-rich simple TR (GC=0.2)

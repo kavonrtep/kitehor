@@ -5,8 +5,8 @@ use clap::Parser;
 use kitehor::classifier::{ClassifierConfig, RandomForest, BAKED_HOR_MODEL, BAKED_K_MODEL};
 use kitehor::classify::{classify as run_classify, Verdict};
 use kitehor::cli::{
-    Cli, Command, KitePeriodicityArgs, SimulateArgs, SimulateGridArgs, SynthArgs,
-    SynthBatchArgs, SynthValidateArgs,
+    Cli, Command, DetectArgs, DetectBatchArgs, KitePeriodicityArgs, SimulateArgs,
+    SimulateGridArgs, SynthArgs, SynthBatchArgs, SynthValidateArgs,
 };
 use kitehor::features::{build_features, FeatureRow};
 use kitehor::hor_call::{classify as hor_classify, HorCallConfig};
@@ -28,7 +28,66 @@ fn main() -> Result<()> {
         Command::SynthSchema => run_synth_schema(),
         Command::Synth(args) => run_synth(args),
         Command::SynthBatch(args) => run_synth_batch(args),
+        Command::Detect(args) => run_detect(args),
+        Command::DetectBatch(args) => run_detect_batch(args),
     }
+}
+
+// ---------------------------------------------------------------------------
+// detect / detect-batch (M0)
+// ---------------------------------------------------------------------------
+
+fn load_detector_config(path: Option<&std::path::PathBuf>) -> Result<kitehor::detect::DetectorConfig> {
+    match path {
+        Some(p) => kitehor::detect::DetectorConfig::load(p),
+        None => {
+            let c = kitehor::detect::DetectorConfig::default();
+            c.validate()?;
+            Ok(c)
+        }
+    }
+}
+
+fn run_detect(args: DetectArgs) -> Result<()> {
+    if args.threads > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global()
+            .ok();
+    }
+    if args.viz_dir.is_some()
+        || args.export_raster
+        || args.export_shift
+        || args.export_edges
+        || args.export_ic
+    {
+        log::warn!(
+            "detect: --viz-dir / --export-* flags are accepted but unused until M5 lands"
+        );
+    }
+    let cfg = load_detector_config(args.config.as_ref())?;
+    let report = kitehor::detect::run_one(&args.fasta, &args.periods, &args.out, &cfg)?;
+    info!(
+        "detect: {} array(s), {} segment(s), {} width row(s); prefix {:?}",
+        report.n_arrays, report.n_segments, report.n_width_rows, args.out
+    );
+    Ok(())
+}
+
+fn run_detect_batch(args: DetectBatchArgs) -> Result<()> {
+    if args.threads > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global()
+            .ok();
+    }
+    if args.viz_dir.is_some() {
+        log::warn!("detect-batch: --viz-dir accepted but unused until M5 lands");
+    }
+    let cfg = load_detector_config(args.config.as_ref())?;
+    let n = kitehor::detect::run_batch(&args.fasta_dir, &args.periods_dir, &args.out_dir, &cfg)?;
+    info!("detect-batch: processed {n} array(s) into {:?}", args.out_dir);
+    Ok(())
 }
 
 fn run_synth(args: SynthArgs) -> Result<()> {

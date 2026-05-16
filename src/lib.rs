@@ -30,4 +30,6 @@ pub mod simulate;
 pub mod simulate_grid;
 pub mod synth;
 
+pub mod detect;
+
 pub use errors::{HordetectError, Result};
