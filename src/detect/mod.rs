@@ -163,6 +163,8 @@ fn run_array_m4(
     props_m35.phase_separation = decision.phase_separation;
     props_m35.inter_monomer_identity = decision.inter_monomer_identity;
     props_m35.reason = decision.reason;
+    // M6: compute confidence over the populated property fields.
+    props_m35.confidence = Some(confidence::compute(&props_m35, cfg));
 
     // If classification picked a different base_width than M3.5's
     // heuristic, rerun Pass-A/B at the new base_width to keep the
