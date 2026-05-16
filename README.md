@@ -133,36 +133,46 @@ The legacy thresholds (`t_low = 0.15`, `t_high = 0.71`) live in
 `config/classifier.toml`. Override them or the Platt coefficients with
 `--classifier-config <path.toml>`.
 
-### v2 simulator (`synth*`)
+## v2 simulator (`synth*`)
 
-`kitehor synth` is a richer, YAML-driven simulator built to feed the
-upcoming line-width detector described in
-[`docs/new/detect_spec.md`](docs/new/detect_spec.md). Unlike the
-`simulate`/`simulate-grid` pair (which targets the rule-based training
-corpus), `synth` can express the full structural taxonomy:
+A richer, YAML-driven simulator that coexists with
+`simulate`/`simulate-grid`. Built to feed the upcoming line-width
+detector ([`docs/new/detect_spec.md`](docs/new/detect_spec.md)),
+`synth` expresses the full structural taxonomy: arbitrary-`k` HORs
+with tunable inter-slot divergence; continuous wobble (sinusoidal or
+AR(1) random walk via residual-accumulator integer edits); discrete
+phase shifts; non-tandem insertions (`random`/`AT_rich`/`GC_rich`/
+`retro_like`/`segdup_like`); post-generation events (HYBRID,
+INVERSION, DUPLICATION, DELETION).
 
-- Simple TRs and HORs of arbitrary multiplicity, with inter-slot
-  divergence as a tunable parameter.
-- Continuous wobble (sinusoidal or AR(1) random walk), realised via a
-  residual-accumulator integer-edit scheme.
-- Discrete phase shifts, non-tandem insertions
-  (random / AT_rich / GC_rich / retro_like / segdup_like), and
-  post-generation events (HYBRID, INVERSION, DUPLICATION, DELETION).
+```bash
+# One array.
+kitehor synth tests/synth_configs/T05_hor_clean.yaml -o /tmp/t05
 
-Outputs per array: `{prefix}.fa`, `{prefix}.truth.tsv` (property
-vector + structural-expression string + events_json), and
-`{prefix}.periods.tsv` (period candidates simulating an upstream
-generator). Add `--diagnostics` for a `{prefix}.diagnostics.json` with
-per-stage provenance.
+# Whole corpus in parallel.
+kitehor synth-batch \
+    --config-dir tests/synth_configs --out-dir /tmp/synth_corpus
 
-The canonical schema lives at
+# Schema-validate a config without generating.
+kitehor synth-validate path/to/config.yaml
+
+# Dump the canonical JSON Schema.
+kitehor synth-schema > simulator_schema.json
+```
+
+Per-array outputs: `{prefix}.fa`, `{prefix}.truth.tsv` (property
+vector + structural-expression + events_json), `{prefix}.periods.tsv`
+(period candidates as an upstream generator would emit). Add
+`--diagnostics` for `{prefix}.diagnostics.json` with per-stage
+provenance (RNG sub-stream seeds, realised template slots,
+per-block coordinates, wobble/noise counts).
+
+The canonical YAML schema lives at
 [`docs/new/simulator_schema.json`](docs/new/simulator_schema.json) and
-is embedded into the binary; `kitehor synth-schema` dumps it to stdout
-and a CI test catches drift. A 22-fixture test corpus (T01–T18, with
-T08 a six-point divergence sweep and T09 deferred) is under
-`tests/synth_configs/`. See
-[`docs/new/simulator_impl_plan.md`](docs/new/simulator_impl_plan.md)
-for the implementation contract.
+is embedded into the binary (drift-tested in CI). The 22-fixture test
+corpus under `tests/synth_configs/` covers T01–T18 (T08 a six-point
+divergence sweep; T09 nested-HOR is deferred). Implementation contract
++ acceptance gates: [`docs/new/simulator_impl_plan.md`](docs/new/simulator_impl_plan.md).
 
 ## Test data
 
@@ -195,13 +205,22 @@ but will agree at the population level.
 
 ```
 src/                   Rust crate
+  rule.rs              default HOR classifier (4-condition rule)
+  classifier.rs        legacy ML loader (RF + Platt); --use-ml-classifier only
+  simulate*.rs         legacy params.tsv-driven simulator
+  synth/               v2 YAML-driven simulator (kitehor synth*)
 config/classifier.toml Thresholds, Platt coefs, imputation medians
 models/                Random-forest JSON (HOR-score + k-predictor)
 tools/training/        R scripts: ranger train, Platt fit, model export, CV
 tools/features/        Python reference feature extractors
-ground_truth/          Synthetic-benchmark spec (regenerate sequences from params.tsv)
+ground_truth/          Legacy synthetic-benchmark spec (regenerate from params.tsv)
 test_data/smoke/       Tiny fixture for build verification
+tests/synth_configs/   v2 simulator test corpus (T01–T18, 22 active + 1 deferred)
 examples/              Cross-validation harness vs. the R prototype
+docs/
+  rule.md              rule classifier algorithm
+  ci-status.md         CI/release plan + runbook
+  new/                 v2 simulator + detector design docs
 ```
 
 ## Training a fresh model
