@@ -1,0 +1,371 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/tr-simulator/simulator.schema.json",
+  "title": "Tandem Repeat Array Simulator Configuration",
+  "description": "Schema for the YAML config that drives the tandem repeat simulator. See simulator_implementation_plan.md and tr_structural_taxonomy_v1.md §5 for context.",
+  "type": "object",
+  "required": ["schema_version", "structure"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [1],
+      "description": "Schema version. Increment when introducing breaking changes."
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Top-level RNG seed. Sub-streams are derived deterministically."
+    },
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mutation_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0,
+          "description": "Per-base point mutation rate applied in the final noise pass."
+        },
+        "indel_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0,
+          "description": "Per-base indel rate (split 50/50 between insertions and deletions) applied in the final noise pass."
+        },
+        "output": {
+          "type": "string",
+          "description": "Output prefix. Files written: PREFIX.fa, PREFIX.truth.tsv, PREFIX.periods.tsv."
+        },
+        "array_id": {
+          "type": "string",
+          "description": "FASTA record ID. Defaults to basename of output prefix."
+        }
+      }
+    },
+    "templates": {
+      "type": "object",
+      "description": "Named template objects. Structural blocks reference templates by ID.",
+      "patternProperties": {
+        "^[A-Za-z_][A-Za-z0-9_]*$": {
+          "oneOf": [
+            {"$ref": "#/$defs/template_hor_slots"},
+            {"$ref": "#/$defs/template_monomer"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "structure": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered sequence of blocks that compose the array.",
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/block_hor"},
+          {"$ref": "#/$defs/block_simple_tr"},
+          {"$ref": "#/$defs/block_shift"},
+          {"$ref": "#/$defs/block_insertion"}
+        ]
+      }
+    },
+    "modifiers": {
+      "type": "array",
+      "description": "Modifiers applied to the assembled sequence before post-generation events.",
+      "items": {"$ref": "#/$defs/modifier_wobble"}
+    },
+    "post_generation": {
+      "type": "array",
+      "description": "Structural events applied after blocks and modifiers. Each event names its target block (zero-indexed into `structure`); the target must be a HOR or SIMPLE_TR block. Copy and slot indices on the event are 1-indexed within that target block.",
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/event_hybrid"},
+          {"$ref": "#/$defs/event_inversion"},
+          {"$ref": "#/$defs/event_duplication"},
+          {"$ref": "#/$defs/event_deletion"}
+        ]
+      }
+    }
+  },
+
+  "$defs": {
+    "template_hor_slots": {
+      "type": "object",
+      "required": ["type", "monomer_length_bp", "k"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "HOR_slots"},
+        "monomer_length_bp": {
+          "type": "integer",
+          "minimum": 20,
+          "description": "Length of each slot consensus in bp."
+        },
+        "k": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "Number of distinct slots per HOR unit. Use a `monomer` template for k=1."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["random", "sequence", "file"],
+          "default": "random"
+        },
+        "sequence": {
+          "type": "string",
+          "pattern": "^[ACGTacgt]+$",
+          "description": "Explicit slot-1 sequence. Used when source = 'sequence'."
+        },
+        "file": {
+          "type": "string",
+          "description": "Path to a FASTA file containing the slot-1 sequence. Used when source = 'file'."
+        },
+        "gc_content": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.5,
+          "description": "G+C fraction for random slot-1 generation. Ignored if source != 'random'."
+        },
+        "inter_slot_divergence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0,
+          "description": "Target pairwise divergence between slots. 0 = identical (regime A). 0.15 = 85% identity (regime B). 0.5+ = regime C (HOR collapses to simple_TR at HOR-unit width)."
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"source": {"const": "sequence"}}},
+          "then": {"required": ["sequence"]}
+        },
+        {
+          "if": {"properties": {"source": {"const": "file"}}},
+          "then": {"required": ["file"]}
+        }
+      ]
+    },
+
+    "template_monomer": {
+      "type": "object",
+      "required": ["type", "monomer_length_bp"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "monomer"},
+        "monomer_length_bp": {"type": "integer", "minimum": 1},
+        "source": {"type": "string", "enum": ["random", "sequence", "file"], "default": "random"},
+        "sequence": {"type": "string", "pattern": "^[ACGTacgt]+$"},
+        "file": {"type": "string"},
+        "gc_content": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.5}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"source": {"const": "sequence"}}},
+          "then": {"required": ["sequence"]}
+        },
+        {
+          "if": {"properties": {"source": {"const": "file"}}},
+          "then": {"required": ["file"]}
+        }
+      ]
+    },
+
+    "block_hor": {
+      "type": "object",
+      "required": ["type", "template", "n_copies"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "HOR"},
+        "template": {
+          "type": "string",
+          "description": "Name of a template in `templates`. Must be of type HOR_slots."
+        },
+        "n_copies": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of HOR units to lay down."
+        }
+      }
+    },
+
+    "block_simple_tr": {
+      "type": "object",
+      "required": ["type", "template", "n_copies"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "SIMPLE_TR"},
+        "template": {
+          "type": "string",
+          "description": "Name of a template in `templates`. May be `monomer` or `HOR_slots` (in the latter case only slot 1 is used)."
+        },
+        "n_copies": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+
+    "block_shift": {
+      "type": "object",
+      "required": ["type", "offset_bp"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "SHIFT"},
+        "offset_bp": {
+          "type": "integer",
+          "description": "Phase shift in bp. Positive = insert that many bases; negative = delete from end of preceding block. |offset_bp| should be less than half a monomer length to avoid undefined behaviour."
+        }
+      }
+    },
+
+    "block_insertion": {
+      "type": "object",
+      "required": ["type", "length_bp", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "INSERTION"},
+        "length_bp": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Length of the non-tandem block to insert."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["random", "AT_rich", "GC_rich", "retro_like", "segdup_like"],
+          "description": "Composition profile. retro_like produces a synthetic LTR-internal-LTR structure; segdup_like copies a random subsequence of the existing output."
+        }
+      }
+    },
+
+    "modifier_wobble": {
+      "type": "object",
+      "required": ["wobble"],
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "type": "string",
+          "default": "all",
+          "description": "Range over which wobble is applied. 'all' = whole sequence. 'block:N' = the Nth block (zero-indexed). 'range:START-END' = explicit bp range. Only 'all' supported in MVP."
+        },
+        "wobble": {
+          "type": "object",
+          "required": ["amplitude_bp"],
+          "additionalProperties": false,
+          "properties": {
+            "amplitude_bp": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Target std (random_walk) or amplitude (sinusoidal) of the per-row shift, in bp."
+            },
+            "period_rows": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "description": "For sinusoidal model: period of the wobble in rows. For random_walk: smoothing window. 0 = aperiodic."
+            },
+            "model": {
+              "type": "string",
+              "enum": ["sinusoidal", "random_walk"],
+              "default": "random_walk"
+            },
+            "realisation": {
+              "type": "string",
+              "enum": ["integer_edits"],
+              "default": "integer_edits",
+              "description": "Method for realising non-integer drift. Only integer_edits supported in MVP (residual-accumulator insertions/deletions)."
+            }
+          }
+        }
+      }
+    },
+
+    "event_hybrid": {
+      "type": "object",
+      "required": ["type", "block", "at_copy", "slot", "source_slots"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "HYBRID"},
+        "block": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-indexed position into `structure`. The targeted block must be of type HOR or SIMPLE_TR."
+        },
+        "at_copy": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Which HOR copy within the targeted block receives the hybrid monomer (1-indexed)."
+        },
+        "slot": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Which slot within that HOR copy is replaced by the hybrid (1-indexed)."
+        },
+        "source_slots": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 1},
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "Two slot indices whose 5' and 3' halves are fused to form the hybrid."
+        },
+        "split_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.5,
+          "description": "Fraction of the original slot length contributed by source_slots[0]. Default 0.5 = clean halves."
+        }
+      }
+    },
+
+    "event_inversion": {
+      "type": "object",
+      "required": ["type", "block", "start_copy", "length_copies"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "INVERSION"},
+        "block": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-indexed position into `structure`. The targeted block must be of type HOR or SIMPLE_TR."
+        },
+        "start_copy": {"type": "integer", "minimum": 1, "description": "First copy (1-indexed) within the targeted block to invert."},
+        "length_copies": {"type": "integer", "minimum": 1, "description": "Number of HOR units (or monomers) to invert."}
+      }
+    },
+
+    "event_duplication": {
+      "type": "object",
+      "required": ["type", "block", "start_copy", "length_copies"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "DUPLICATION"},
+        "block": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-indexed position into `structure`. The targeted block must be of type HOR or SIMPLE_TR."
+        },
+        "start_copy": {"type": "integer", "minimum": 1, "description": "First copy (1-indexed) within the targeted block to duplicate."},
+        "length_copies": {"type": "integer", "minimum": 1, "description": "Number of HOR units (or monomers) to duplicate."}
+      }
+    },
+
+    "event_deletion": {
+      "type": "object",
+      "required": ["type", "block", "start_copy", "length_copies"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "DELETION"},
+        "block": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-indexed position into `structure`. The targeted block must be of type HOR or SIMPLE_TR."
+        },
+        "start_copy": {"type": "integer", "minimum": 1, "description": "First copy (1-indexed) within the targeted block to delete."},
+        "length_copies": {"type": "integer", "minimum": 1, "description": "Number of HOR units (or monomers) to delete."}
+      }
+    }
+  }
+}
