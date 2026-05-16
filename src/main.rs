@@ -55,18 +55,21 @@ fn run_detect(args: DetectArgs) -> Result<()> {
             .build_global()
             .ok();
     }
-    if args.viz_dir.is_some()
-        || args.export_raster
-        || args.export_shift
-        || args.export_edges
-        || args.export_ic
-    {
-        log::warn!(
-            "detect: --viz-dir / --export-* flags are accepted but unused until M5 lands"
-        );
-    }
     let cfg = load_detector_config(args.config.as_ref())?;
-    let report = kitehor::detect::run_one(&args.fasta, &args.periods, &args.out, &cfg)?;
+    let viz_flags = kitehor::detect::VizFlags {
+        viz_dir: args.viz_dir.clone(),
+        export_raster: args.export_raster,
+        export_shift: args.export_shift,
+        export_edges: args.export_edges,
+        export_ic: args.export_ic,
+    };
+    let report = kitehor::detect::run_one(
+        &args.fasta,
+        &args.periods,
+        &args.out,
+        &cfg,
+        &viz_flags,
+    )?;
     info!(
         "detect: {} array(s), {} segment(s), {} width row(s); prefix {:?}",
         report.n_arrays, report.n_segments, report.n_width_rows, args.out
@@ -81,11 +84,18 @@ fn run_detect_batch(args: DetectBatchArgs) -> Result<()> {
             .build_global()
             .ok();
     }
-    if args.viz_dir.is_some() {
-        log::warn!("detect-batch: --viz-dir accepted but unused until M5 lands");
-    }
     let cfg = load_detector_config(args.config.as_ref())?;
-    let n = kitehor::detect::run_batch(&args.fasta_dir, &args.periods_dir, &args.out_dir, &cfg)?;
+    let viz_flags = kitehor::detect::VizFlags {
+        viz_dir: args.viz_dir.clone(),
+        ..Default::default()
+    };
+    let n = kitehor::detect::run_batch(
+        &args.fasta_dir,
+        &args.periods_dir,
+        &args.out_dir,
+        &cfg,
+        &viz_flags,
+    )?;
     info!("detect-batch: processed {n} array(s) into {:?}", args.out_dir);
     Ok(())
 }

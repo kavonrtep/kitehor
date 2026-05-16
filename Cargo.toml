@@ -41,6 +41,11 @@ rand        = "0.9"
 rand_chacha = "0.9"
 rand_distr  = "0.5"
 jsonschema  = { version = "0.30", default-features = false }
+image       = { version = "0.25", optional = true, default-features = false, features = ["png"] }
+
+[features]
+default = ["viz"]
+viz = ["dep:image"]
 
 [dev-dependencies]
 proptest = "1"

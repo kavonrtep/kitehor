@@ -25,6 +25,8 @@ pub mod widths;
 pub mod wrap;
 
 pub use config::DetectorConfig;
+pub use consensus::ConsensusRecord;
+pub use viz::VizFlags;
 pub use types::{
     Class, ClassHint, PeriodCandidate, Properties, Segment, WidthFeatures,
     PROPERTIES_HEADER, SEGMENTS_HEADER, WIDTH_FEATURES_HEADER,
@@ -45,6 +47,7 @@ pub fn run_one(
     periods: &Path,
     out_prefix: &Path,
     cfg: &DetectorConfig,
+    viz_flags: &VizFlags,
 ) -> Result<DetectorReport> {
     cfg.validate()?;
     let arrays = io::load_arrays(fasta)?;
@@ -58,17 +61,37 @@ pub fn run_one(
     let mut properties: Vec<Properties> = Vec::with_capacity(paired.len());
     let segments: Vec<Segment> = Vec::new();
     let mut width_features: Vec<WidthFeatures> = Vec::new();
+    let mut consensus_records: Vec<ConsensusRecord> = Vec::new();
 
     for (arr, pers) in &paired {
         let (props, mut widths) = run_array_m4(arr, pers, cfg);
+        // M5: build consensus + viz when we have a chosen base width.
+        if let Some(base_w) = props.base_width_bp {
+            if let Some(monomer) = consensus::consensus(&arr.seq, base_w) {
+                let hor_unit = props
+                    .hor_length_bp
+                    .and_then(|hu| consensus::consensus(&arr.seq, hu));
+                consensus_records.push(ConsensusRecord {
+                    array_id: arr.id.clone(),
+                    monomer,
+                    hor_unit,
+                    hor_k: props.hor_k,
+                });
+            }
+            if viz_flags.is_active() {
+                emit_viz(arr, base_w, cfg, viz_flags)?;
+            }
+        }
         properties.push(props);
         width_features.append(&mut widths);
-        // segments emission lands when phase shifts are detected.
     }
 
     io::write_properties(out_prefix, &properties)?;
     io::write_segments(out_prefix, &segments)?;
     io::write_width_features(out_prefix, &width_features)?;
+    if !consensus_records.is_empty() {
+        consensus::write_fasta(out_prefix, &consensus_records)?;
+    }
 
     Ok(DetectorReport {
         n_arrays: paired.len(),
@@ -77,10 +100,46 @@ pub fn run_one(
     })
 }
 
-/// M0-only per-array work: build a placeholder property row.
-fn run_array_m0(arr: &ArrayRecord) -> Properties {
-    Properties::placeholder(&arr.id, arr.length)
+fn emit_viz(
+    arr: &ArrayRecord,
+    base_w: usize,
+    cfg: &DetectorConfig,
+    viz_flags: &VizFlags,
+) -> Result<()> {
+    let bg = wrap::Background::compute(&arr.seq);
+    let stats = wrap::wrap_and_ic(&arr.seq, base_w, &bg, cfg);
+    let n_rows = stats.as_ref().map(|s| s.n_rows).unwrap_or(0);
+    let column_ic_vec: Option<Vec<f64>> = stats.as_ref().map(|s| s.column_ic.clone());
+    let embs = embed::embed_rows(&arr.seq, base_w, cfg);
+    let ac = autocorr::compute(&embs, cfg.max_hor_k);
+    let r_k_vec = ac.r_k.clone();
+    let edge = if n_rows >= 2 {
+        edges::compute(&arr.seq, base_w, n_rows)
+    } else {
+        None
+    };
+    let column_edge_rate_vec: Option<Vec<f64>> =
+        edge.as_ref().map(|e| e.column_edge_rate.clone());
+    let shift_feats = if n_rows >= 2 {
+        shift::compute(&arr.seq, base_w, n_rows, cfg)
+    } else {
+        None
+    };
+    let best_shift_vec: Vec<i32> = shift_feats.map(|s| s.best_shift).unwrap_or_default();
+    let bundle = viz::VizBundle {
+        array_id: &arr.id,
+        width_bp: base_w,
+        seq: &arr.seq,
+        n_rows,
+        column_ic: column_ic_vec.as_deref(),
+        column_edge_rate: column_edge_rate_vec.as_deref(),
+        r_k: Some(&r_k_vec),
+        best_shift: Some(&best_shift_vec),
+    };
+    viz::export(viz_flags, &bundle)
 }
+
+// M0 placeholder removed; M4 path produces real classifications.
 
 /// M4 per-array work: produces a real `class` + supporting fields by
 /// running the classify module over `width_features`. Then layers M3.5
@@ -291,6 +350,7 @@ pub fn run_batch(
     periods_dir: &Path,
     out_dir: &Path,
     cfg: &DetectorConfig,
+    viz_flags: &VizFlags,
 ) -> Result<usize> {
     use rayon::prelude::*;
     std::fs::create_dir_all(out_dir)?;
@@ -298,7 +358,7 @@ pub fn run_batch(
     let n = pairs.len();
     pairs.par_iter().try_for_each(|(fa, pe, stem)| -> Result<()> {
         let prefix = out_dir.join(stem);
-        run_one(fa, pe, &prefix, cfg).map(|_| ())
+        run_one(fa, pe, &prefix, cfg, viz_flags).map(|_| ())
     })?;
     Ok(n)
 }
