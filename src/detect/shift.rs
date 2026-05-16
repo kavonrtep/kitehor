@@ -278,14 +278,15 @@ fn fft_periodicity(best_shift: &[i32], width: usize) -> Option<f64> {
         }
     }
     // Magnitude floor: require the peak to be ≥ 3× the median bin
-    // magnitude (cheap "is this peak distinct from background" test).
+    // magnitude AND a non-zero peak (otherwise an all-zero signal
+    // would produce best=(0, 0) and a div-by-zero `inf` period).
     let mut all_mags: Vec<f32> = (2..n / 2).map(|k| buf[k].norm_sqr()).collect();
     if all_mags.is_empty() {
         return None;
     }
     all_mags.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = all_mags[all_mags.len() / 2];
-    if best.1 < median * 3.0 {
+    if best.0 == 0 || best.1 <= 0.0 || best.1 < median * 3.0 {
         return None;
     }
     // Period = signal length / harmonic index, expressed in rows;

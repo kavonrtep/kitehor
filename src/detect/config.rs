@@ -33,6 +33,21 @@ pub struct DetectorConfig {
     pub phase_separation_threshold: f64,
     pub primitive_correction_delta: f64,
     pub min_hor_units: usize,
+    /// R(1) floor at base width for regime-B HOR. Below this, the
+    /// HOR is in regime C — slot consensuses too diverged to call
+    /// the base period statistically valid; fall to simple_TR at
+    /// HOR-unit width.
+    pub regime_c_r1_threshold: f64,
+    /// Input-period-score threshold for the "coexisting repeats →
+    /// mixed" fallback. Two+ input periods with `period_score >=
+    /// strong_period_score` after multiplicity dedup → mixed.
+    pub strong_period_score: f64,
+    /// Regime-A tag fires when the simple_TR candidate's
+    /// `|R(best_lag) - R(1)| < regime_a_r_curve_flatness` AND
+    /// `R(1) > regime_a_r1_floor`. Reason field then mentions
+    /// "regime A".
+    pub regime_a_r_curve_flatness: f64,
+    pub regime_a_r1_floor: f64,
 
     // Shift
     pub shift_local_range_bp: i32,
@@ -97,6 +112,10 @@ impl Default for DetectorConfig {
             phase_separation_threshold: 0.15,
             primitive_correction_delta: 0.05,
             min_hor_units: 5,
+            regime_c_r1_threshold: 0.5,
+            strong_period_score: 0.85,
+            regime_a_r_curve_flatness: 0.05,
+            regime_a_r1_floor: 0.85,
 
             shift_local_range_bp: 5,
             shift_breakpoint_threshold: 3,

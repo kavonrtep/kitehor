@@ -80,8 +80,16 @@ structure:
     assert_eq!(fields[0], "arr");
     // length_bp = 170 * 100 = 17000
     assert_eq!(fields[1], "17000");
-    // M0 placeholder always reports `ambiguous`.
-    assert_eq!(fields[2], "ambiguous");
+    // `class` must be one of the documented values (M4+ replaces M0's
+    // placeholder `ambiguous` with a real call).
+    assert!(
+        matches!(
+            fields[2],
+            "simple_TR" | "HOR" | "irregular_HOR" | "mixed" | "ambiguous"
+        ),
+        "unexpected class value {:?}",
+        fields[2]
+    );
 
     // segments.tsv: header only
     let mut p = out_prefix.as_os_str().to_owned();

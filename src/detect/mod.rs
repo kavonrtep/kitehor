@@ -60,10 +60,10 @@ pub fn run_one(
     let mut width_features: Vec<WidthFeatures> = Vec::new();
 
     for (arr, pers) in &paired {
-        let (props, mut widths) = run_array_m3_5(arr, pers, cfg);
+        let (props, mut widths) = run_array_m4(arr, pers, cfg);
         properties.push(props);
         width_features.append(&mut widths);
-        // M4 will append segments.
+        // segments emission lands when phase shifts are detected.
     }
 
     io::write_properties(out_prefix, &properties)?;
@@ -80,6 +80,70 @@ pub fn run_one(
 /// M0-only per-array work: build a placeholder property row.
 fn run_array_m0(arr: &ArrayRecord) -> Properties {
     Properties::placeholder(&arr.id, arr.length)
+}
+
+/// M4 per-array work: produces a real `class` + supporting fields by
+/// running the classify module over `width_features`. Then layers M3.5
+/// Pass-B phase-shift offset recovery on top, using the chosen
+/// `base_width_bp` as the primary width for shift analysis.
+fn run_array_m4(
+    arr: &ArrayRecord,
+    pers: &[PeriodCandidate],
+    cfg: &DetectorConfig,
+) -> (Properties, Vec<WidthFeatures>) {
+    let (mut props_m35, widths) = run_array_m3_5(arr, pers, cfg);
+    let decision = classify::decide_array(arr, pers, &widths, cfg);
+
+    // Copy decision fields into properties.
+    props_m35.class = decision.class;
+    props_m35.base_width_bp = decision.base_width_bp.or(props_m35.base_width_bp);
+    props_m35.hor_k = decision.hor_k;
+    props_m35.hor_length_bp = decision.hor_length_bp;
+    props_m35.n_complete_copies = decision.n_complete_copies;
+    props_m35.column_conservation = decision.column_conservation;
+    props_m35.phase_separation = decision.phase_separation;
+    props_m35.inter_monomer_identity = decision.inter_monomer_identity;
+    props_m35.reason = decision.reason;
+
+    // If classification picked a different base_width than M3.5's
+    // heuristic, rerun Pass-A/B at the new base_width to keep the
+    // phase-shift positions/offsets consistent.
+    if let Some(target_w) = decision.base_width_bp {
+        let already_done = props_m35.base_width_bp == Some(target_w);
+        if !already_done {
+            if let Some(w_features) = widths.iter().find(|w| w.width_bp == target_w) {
+                if w_features.rows >= 2 {
+                    if let Some(shift_feats) =
+                        shift::compute(&arr.seq, target_w, w_features.rows, cfg)
+                    {
+                        let window_rows = (cfg.block_size_rows_min / 8).max(8);
+                        let offsets = shift::recover_offsets_at_breakpoints(
+                            &arr.seq,
+                            target_w,
+                            w_features.rows,
+                            &shift_feats.breakpoints,
+                            window_rows,
+                        );
+                        let positions: Vec<usize> = shift_feats
+                            .breakpoints
+                            .iter()
+                            .map(|&b| (b + 1) * target_w)
+                            .collect();
+                        props_m35.n_phase_shifts = positions.len();
+                        props_m35.phase_shift_positions = positions;
+                        props_m35.phase_shift_offsets =
+                            offsets.iter().map(|&v| v as i64).collect();
+                        props_m35.n_segments = 1 + props_m35.n_phase_shifts;
+                        props_m35.mean_shift_bp = Some(shift_feats.mean_shift_bp);
+                        props_m35.wobble_amplitude_bp = Some(shift_feats.wobble_amplitude_bp);
+                        props_m35.wobble_periodicity_bp = shift_feats.wobble_periodicity_bp;
+                    }
+                }
+            }
+        }
+    }
+
+    (props_m35, widths)
 }
 
 /// M3.5 per-array work: M3 + Pass-B phase-shift offset recovery.
