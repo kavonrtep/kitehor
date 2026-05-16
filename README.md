@@ -160,11 +160,16 @@ in one shell pipeline. Score mapping
 
 | Rule verdict | Rows written |
 |---|---|
-| `Hor{founder, tile}` | founder @ 0.95, tile @ 0.90 (if distinct), other top-3 @ 0.60 |
-| `Tandem{monomer}`    | monomer @ 0.95, other top-3 @ 0.60 |
-| `Unresolved`         | top-3 peaks @ 0.50 / 0.40 / 0.30 (hints) |
-| `NoSignal`           | no rows (pass `--allow-missing-periods` to detect) |
-| no `--classify`      | top-3 peaks @ 0.60 (hints) |
+| `Hor{founder, tile}` | founder @ 0.95 (`kite_founder`); tile @ 0.90 (`kite_tile`) if distinct; remaining top-3 peaks @ 0.60 (`kite_secondary`) |
+| `Tandem{monomer}`    | monomer @ 0.95 (`kite_monomer`); remaining top-3 peaks @ 0.60 (`kite_secondary`) |
+| `Unresolved`         | top-3 peaks @ 0.50 / 0.40 / 0.30 (`kite_peak`) |
+| `NoSignal`           | no rows — pass `--allow-missing-periods` to detect |
+| QC-skipped record    | no rows — pass `--allow-missing-periods` to detect |
+| no `--classify`      | top-3 peaks @ 0.60 (`kite_peak`) |
+
+The emitter never looks past Kite's top-3 peaks — anything at rank
+4 or deeper is discarded regardless of verdict. Mutually exclusive
+with `--use-ml-classifier`.
 
 Scores are chosen relative to the detector's
 `strong_period_score = 0.85` gate: values ≥ that floor can fire HOR

@@ -1,18 +1,29 @@
 //! Bridge from `kite-periodicity` output to the v2 detector's
 //! `periods.tsv` schema.
 //!
-//! Score mapping (settled 2026-05-16 in the integration discussion):
+//! Score mapping (settled 2026-05-16 in the integration discussion;
+//! tightened per `docs/reviews/kite_emit_periods_integration_review_2026-05-16.md`
+//! review finding #1):
 //!
 //! | rule verdict       | rows emitted                                  |
 //! |--------------------|-----------------------------------------------|
-//! | `Hor{founder,tile}`| founder @ 0.95 (kite_founder), tile @ 0.90    |
-//! |                    |   (kite_tile) if distinct, plus other top-3   |
-//! |                    |   peaks @ 0.60 (kite_secondary)               |
-//! | `Tandem{monomer}`  | monomer @ 0.95 (kite_founder), plus other     |
-//! |                    |   top-3 peaks @ 0.60 (kite_secondary)         |
-//! | `Unresolved`       | top-3 peaks @ 0.50 / 0.40 / 0.30 (kite_peak)  |
+//! | `Hor{founder,tile}`| founder @ 0.95 (`kite_founder`); tile @ 0.90  |
+//! |                    |   (`kite_tile`) if ≠ founder; any of the      |
+//! |                    |   **top-3 Kite peaks** not already used @ 0.60|
+//! |                    |   (`kite_secondary`)                          |
+//! | `Tandem{monomer}`  | monomer @ 0.95 (`kite_monomer`); any of the   |
+//! |                    |   **top-3 Kite peaks** not already used @ 0.60|
+//! |                    |   (`kite_secondary`)                          |
+//! | `Unresolved`       | top-3 peaks @ 0.50 / 0.40 / 0.30 (`kite_peak`)|
 //! | `NoSignal`         | no rows                                       |
-//! | no classifier      | top-3 peaks @ 0.60 (kite_peak)                |
+//! | no classifier      | top-3 peaks @ 0.60 (`kite_peak`)              |
+//!
+//! **Top-3 contract**: the emitter never looks past `kr.peaks[0..3]`.
+//! Founder/tile peaks already in the top-3 don't double up;
+//! founder/tile peaks outside the top-3 (rare; the rule classifier
+//! requires founder in top-N where N is configurable upstream) are
+//! kept as the high-score row and don't earn an additional
+//! secondary slot.
 //!
 //! Scores are chosen relative to the detector's
 //! `DetectorConfig::strong_period_score` (default 0.85): values ≥
@@ -40,8 +51,10 @@ pub struct PeriodsRow {
 /// Header used by the v2 detector loader (`detect::io::load_periods`).
 pub const PERIODS_HEADER: &str = "array_id\tperiod_bp\tperiod_score\tsource";
 
-/// How many non-founder/tile peaks to admit as secondaries / hints.
-const MAX_SECONDARIES: usize = 3;
+/// Size of the Kite-peak window the emitter considers. Review-#1:
+/// secondaries are drawn only from the top-3, NOT "the next three
+/// peaks after excluding founder/tile". Hint-only paths also cap at 3.
+const TOP_N_KITE_PEAKS: usize = 3;
 
 /// Score floor under which everything stays a hint (below
 /// detector's default `strong_period_score = 0.85`).
@@ -85,11 +98,14 @@ pub fn build_rows(kr: &KiteResult, verdict: Option<&RuleVerdict>) -> Vec<Periods
             append_secondaries(&mut rows, &mut used, kr, &array_id);
         }
         Some(RuleVerdict::Tandem { monomer_bp }) => {
+            // Review-#5: rename for clarity. A tandem monomer is not a
+            // HOR founder. Detector ignores `source`, so this is a
+            // user-facing relabel only.
             rows.push(PeriodsRow {
                 array_id: array_id.clone(),
                 period_bp: *monomer_bp,
                 period_score: FOUNDER_SCORE,
-                source: "kite_founder".into(),
+                source: "kite_monomer".into(),
             });
             used.insert(*monomer_bp);
             append_secondaries(&mut rows, &mut used, kr, &array_id);
@@ -104,7 +120,7 @@ pub fn build_rows(kr: &KiteResult, verdict: Option<&RuleVerdict>) -> Vec<Periods
             // No classifier ran: emit raw kite peaks as hints at a
             // single below-floor score (no way to tell founder from
             // harmonic without the rule).
-            for p in kr.peaks.iter().take(MAX_SECONDARIES) {
+            for p in kr.peaks.iter().take(TOP_N_KITE_PEAKS) {
                 rows.push(PeriodsRow {
                     array_id: array_id.clone(),
                     period_bp: p.period,
@@ -123,11 +139,10 @@ fn append_secondaries(
     kr: &KiteResult,
     array_id: &str,
 ) {
-    let mut n = 0usize;
-    for p in &kr.peaks {
-        if n >= MAX_SECONDARIES {
-            break;
-        }
+    // Review-#1: only walk Kite's top-3 peaks. Anything past rank 3
+    // is not part of the documented contract and risks letting
+    // harmonic / noisy lower-rank peaks reach the detector.
+    for p in kr.peaks.iter().take(TOP_N_KITE_PEAKS) {
         if used.contains(&p.period) {
             continue;
         }
@@ -138,12 +153,12 @@ fn append_secondaries(
             source: "kite_secondary".into(),
         });
         used.insert(p.period);
-        n += 1;
     }
 }
 
 fn append_hint_peaks(rows: &mut Vec<PeriodsRow>, kr: &KiteResult, array_id: &str) {
-    for (i, p) in kr.peaks.iter().take(HINT_SCORE_DESCENDING.len()).enumerate() {
+    let n = TOP_N_KITE_PEAKS.min(HINT_SCORE_DESCENDING.len());
+    for (i, p) in kr.peaks.iter().take(n).enumerate() {
         rows.push(PeriodsRow {
             array_id: array_id.to_string(),
             period_bp: p.period,
@@ -205,13 +220,16 @@ mod tests {
 
     #[test]
     fn hor_emits_founder_tile_and_secondaries() {
+        // Top-3 are [2052, 171, 342]; founder=171, tile=2052 → only
+        // 342 qualifies as a secondary. Rank-4 (513) is excluded by
+        // the top-3 cap (Review-#1).
         let kr = mk_result(
             "a1",
             vec![
                 mk_peak(2052, 1.0), // d1 / tile
                 mk_peak(171, 0.5),  // founder
                 mk_peak(342, 0.2),  // secondary
-                mk_peak(513, 0.1),  // secondary
+                mk_peak(513, 0.1),  // rank 4 — excluded
             ],
         );
         let v = RuleVerdict::Hor {
@@ -221,18 +239,17 @@ mod tests {
             share: 0.5,
         };
         let rows = build_rows(&kr, Some(&v));
-        assert_eq!(rows.len(), 4);
+        assert_eq!(rows.len(), 3, "founder + tile + 1 top-3-eligible secondary");
         assert_eq!(rows[0].period_bp, 171);
         assert!((rows[0].period_score - 0.95).abs() < 1e-9);
         assert_eq!(rows[0].source, "kite_founder");
         assert_eq!(rows[1].period_bp, 2052);
         assert!((rows[1].period_score - 0.90).abs() < 1e-9);
         assert_eq!(rows[1].source, "kite_tile");
-        // Secondaries
-        for r in &rows[2..] {
-            assert!((r.period_score - 0.60).abs() < 1e-9);
-            assert_eq!(r.source, "kite_secondary");
-        }
+        // The single secondary.
+        assert_eq!(rows[2].period_bp, 342);
+        assert!((rows[2].period_score - 0.60).abs() < 1e-9);
+        assert_eq!(rows[2].source, "kite_secondary");
     }
 
     #[test]
@@ -246,6 +263,9 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].period_bp, 178);
         assert!((rows[0].period_score - 0.95).abs() < 1e-9);
+        // Review-#5: tandem monomer is labeled `kite_monomer`,
+        // not `kite_founder`.
+        assert_eq!(rows[0].source, "kite_monomer");
         assert_eq!(rows[1].period_bp, 356);
         assert!((rows[1].period_score - 0.60).abs() < 1e-9);
     }
@@ -311,16 +331,23 @@ mod tests {
     }
 
     #[test]
-    fn secondaries_capped_at_max() {
-        // 10 peaks; only 3 should make it through after founder.
+    fn secondaries_capped_at_top_3() {
+        // 10 peaks; monomer is rank 1 (200). Top-3 are [200, 201, 202];
+        // monomer takes 200 → secondaries = {201, 202}.
         let peaks: Vec<KitePeak> = (0..10).map(|i| mk_peak(200 + i, 1.0 - 0.05 * i as f64)).collect();
         let kr = mk_result("a1", peaks);
         let v = RuleVerdict::Tandem { monomer_bp: 200 };
         let rows = build_rows(&kr, Some(&v));
-        // 1 founder + at most 3 secondaries
-        assert!(rows.len() <= 4);
+        // 1 monomer + 2 secondaries (the two remaining top-3 peaks).
+        assert_eq!(rows.len(), 3);
         let n_sec = rows.iter().filter(|r| r.source == "kite_secondary").count();
-        assert_eq!(n_sec, MAX_SECONDARIES);
+        assert_eq!(n_sec, 2);
+        let sec_periods: Vec<usize> = rows
+            .iter()
+            .filter(|r| r.source == "kite_secondary")
+            .map(|r| r.period_bp)
+            .collect();
+        assert_eq!(sec_periods, vec![201, 202]);
     }
 
     #[test]
@@ -334,6 +361,70 @@ mod tests {
         let s = std::fs::read_to_string(&p).unwrap();
         let lines: Vec<&str> = s.lines().collect();
         assert_eq!(lines[0], PERIODS_HEADER);
-        assert!(lines[1].starts_with("a1\t171\t0.9500\tkite_founder"));
+        // Review-#5: tandem high-score row labels source `kite_monomer`.
+        assert!(lines[1].starts_with("a1\t171\t0.9500\tkite_monomer"));
+    }
+
+    // Review-#1: secondaries must not include peaks past rank 3.
+    #[test]
+    fn secondaries_never_look_past_top_3() {
+        // 5 peaks; founder at rank 5 (intentionally outside top-3 —
+        // wouldn't actually happen via the rule classifier but
+        // exercises the cap). Secondaries are drawn from top-3 only,
+        // so we should see at most founder + 3 secondaries.
+        let kr = mk_result(
+            "a1",
+            vec![
+                mk_peak(100, 1.0),  // rank 1
+                mk_peak(200, 0.8),  // rank 2
+                mk_peak(300, 0.6),  // rank 3
+                mk_peak(400, 0.4),  // rank 4 — never emitted
+                mk_peak(500, 0.2),  // rank 5 — founder for this test
+            ],
+        );
+        let v = RuleVerdict::Hor {
+            founder: 500,
+            tile: 1000, // tile not in peaks list
+            k: 2,
+            share: 0.5,
+        };
+        let rows = build_rows(&kr, Some(&v));
+        let periods: Vec<usize> = rows.iter().map(|r| r.period_bp).collect();
+        assert!(periods.contains(&500));
+        assert!(periods.contains(&1000));
+        // None of the rank-4 or rank-5 (= founder, allowed) periods
+        // should appear as a secondary. Rank 4 (400) must be absent.
+        assert!(!periods.contains(&400), "rank-4 peak leaked past top-3 cap");
+        // Top-3 peaks 100/200/300 each should appear as secondaries.
+        for w in [100, 200, 300] {
+            assert!(periods.contains(&w), "top-3 peak {w} should be a secondary");
+        }
+    }
+
+    #[test]
+    fn secondaries_skip_founder_and_tile_in_top_3() {
+        // founder + tile both fall within Kite's top-3 → they should
+        // not double as secondaries. Only the remaining top-3 peak
+        // should fire as a secondary.
+        let kr = mk_result(
+            "a1",
+            vec![
+                mk_peak(2052, 1.0), // tile, rank 1
+                mk_peak(171, 0.8),  // founder, rank 2
+                mk_peak(342, 0.6),  // the one valid secondary
+                mk_peak(513, 0.4),  // rank 4 — must NOT be emitted
+            ],
+        );
+        let v = RuleVerdict::Hor {
+            founder: 171,
+            tile: 2052,
+            k: 12,
+            share: 0.5,
+        };
+        let rows = build_rows(&kr, Some(&v));
+        let secondaries: Vec<&PeriodsRow> =
+            rows.iter().filter(|r| r.source == "kite_secondary").collect();
+        assert_eq!(secondaries.len(), 1);
+        assert_eq!(secondaries[0].period_bp, 342);
     }
 }

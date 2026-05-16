@@ -126,6 +126,30 @@ to where in this plan the change applied.
   - single-run `detect` now mirrors batch-mode DH11: periods rows
     whose `array_id` matches no FASTA record are a hard error
     unless `--allow-extra-periods` is set (review #11, low).
+- **A18 — kite emit-periods review fixes**
+  (`docs/reviews/kite_emit_periods_integration_review_2026-05-16.md`).
+  Tightens A17:
+  - **Top-3 cap** is enforced on the *source set*, not the *output
+    count*. Secondaries are drawn only from `kr.peaks[0..3]` minus
+    founder/tile — never from rank 4+ (review #1, high). Closes
+    the ambiguity in the original "other top-3 peaks" phrasing.
+  - **ML classifier conflict.** `--emit-periods` is now mutually
+    exclusive with `--use-ml-classifier` at the clap level —
+    silently falling back to raw kite peaks while the ML path
+    held founder/tile in memory was confusing (review #2, medium).
+  - **QC-skipped records** documented as a second case where
+    `--allow-missing-periods` is required on the detector side
+    (alongside `NoSignal`). README + CLAUDE.md updated; CLI help
+    text spells out both cases (review #3, medium).
+  - **Tandem source label** renamed `kite_founder` → `kite_monomer`
+    (review #5, low). Detector ignores `source` so this is a
+    user-facing relabel only.
+  - **End-to-end test** added at `tests/detect_kite_emit.rs`:
+    runs `kite-periodicity --classify --emit-periods` then
+    `detect --periods` on the committed smoke fixture, asserts
+    v2-schema header, periods-row sanity, and a 20-column
+    properties.tsv with at least one resolved class. Also
+    asserts the `--use-ml-classifier` conflict (review #4, medium).
 - **A17 — kite → detector integration**
   (settled in the 2026-05-16 integration discussion). Affects §7 (CLI).
   `kitehor kite-periodicity --emit-periods <path>` writes a v2

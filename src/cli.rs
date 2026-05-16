@@ -129,9 +129,17 @@ pub struct KitePeriodicityArgs {
     /// tile → 0.90, other top-3 peaks → 0.60; ambiguous verdicts
     /// (`Unresolved`) emit top-3 at 0.50 / 0.40 / 0.30. Without
     /// `--classify`, raw kite top-3 peaks emit at 0.60. NoSignal
-    /// produces no rows (use `kitehor detect --allow-missing-periods`
-    /// to keep those records in the output).
-    #[arg(long, value_name = "PATH")]
+    /// produces no rows; records rejected by kite QC also leave
+    /// no rows — use `kitehor detect --allow-missing-periods` in
+    /// either case to keep those records in the detector output
+    /// (they end up as `ambiguous`).
+    ///
+    /// Mutually exclusive with `--use-ml-classifier` — the ML
+    /// path's `founder` / `tile` aren't surfaced through this
+    /// emitter, so silently emitting low-score raw peaks would
+    /// be misleading. Use the default rule-based `--classify`
+    /// instead.
+    #[arg(long, value_name = "PATH", conflicts_with = "use_ml_classifier")]
     pub emit_periods: Option<PathBuf>,
 
     // -- Rule-based HOR layer (legacy, hor_call.rs) --------------------

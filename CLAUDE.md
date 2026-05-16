@@ -32,7 +32,10 @@ Sequence-agnostic HOR detector. Two pipelines coexist:
    Score mapping in `src/emit_periods.rs`: founder=0.95,
    tile=0.90, other top-3=0.60; ambiguous verdicts (`Unresolved`)
    emit hints at 0.50/0.40/0.30. `--allow-missing-periods` is
-   needed only if kite produced NoSignal for any record.
+   needed when kite produces no rows for a record — either because
+   the rule returned `NoSignal`, or because the FASTA record was
+   rejected by kite's `LoadQC` (e.g., too short, too many Ns). In
+   both cases the detector will tag the record `ambiguous`.
 
 The earlier ML pipeline (RF + Platt + k-recovery + homology) is still
 available via `--use-ml-classifier`. It is over-sensitive on real
