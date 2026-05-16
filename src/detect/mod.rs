@@ -10,6 +10,7 @@ pub mod io;
 pub mod types;
 
 // Algorithm modules — empty stubs at M0; populated M1..M5.
+pub mod analysis_blocks;
 pub mod autocorr;
 pub mod classify;
 pub mod confidence;
@@ -163,6 +164,87 @@ fn emit_viz(
 
 // M0 placeholder removed; M4 path produces real classifications.
 
+/// M7.1: compute per-block consensus identity stats for HOR / irregular_HOR
+/// arrays and log them at debug level. Pure observation pass — the M7.2
+/// override that consumes the stats is wired in later.
+///
+/// Comparison-width choice follows `docs/new/detect_m7_plan.md` Q2:
+///   - prefer `hor_length_bp` consensus when each analysis block fits
+///     at least `cfg.min_complete_units_per_block` complete HOR units;
+///   - otherwise fall back to `base_width_bp`.
+fn compute_analysis_block_diagnostics(
+    arr: &ArrayRecord,
+    props: &Properties,
+    cfg: &DetectorConfig,
+) {
+    let Some(base_w) = props.base_width_bp else { return };
+
+    // Pick the comparison width.
+    let n_rows_base = arr.seq.len() / base_w.max(1);
+    let unit_rows_at_unit_width = props
+        .hor_length_bp
+        .map(|hu| arr.seq.len() / hu.max(1));
+    let (comparison_width, n_rows_cmp, unit_rows_in_cmp) =
+        match (props.hor_length_bp, unit_rows_at_unit_width) {
+            (Some(hu), Some(n_units)) => {
+                // How many HOR units would each analysis block hold
+                // if we evenly partitioned to max_segments_per_array?
+                let target_blocks = cfg.max_segments_per_array.max(1);
+                let units_per_block = n_units / target_blocks;
+                if units_per_block >= cfg.min_complete_units_per_block {
+                    // Use HOR-unit width.
+                    (hu, n_units, None)
+                } else {
+                    // Fall back to base width; emit unit-aligned blocks
+                    // when k is known so partial units at block edges
+                    // don't drive the comparison later.
+                    let unit_rows_base = props.hor_k.unwrap_or(1).max(1);
+                    (base_w, n_rows_base, Some(unit_rows_base))
+                }
+            }
+            _ => (base_w, n_rows_base, None),
+        };
+
+    // Phase-shift splits map from bp → rows in the comparison-width grid.
+    let extra_splits: Vec<usize> = props
+        .phase_shift_positions
+        .iter()
+        .filter_map(|&bp| {
+            if comparison_width == 0 { return None; }
+            Some(bp / comparison_width)
+        })
+        .collect();
+
+    let blocks = analysis_blocks::build_blocks(
+        n_rows_cmp,
+        unit_rows_in_cmp,
+        &extra_splits,
+        cfg,
+    );
+    if blocks.len() < 2 {
+        return;
+    }
+    let consensuses =
+        analysis_blocks::block_consensuses(&arr.seq, comparison_width, &blocks);
+    let pairs = analysis_blocks::pairwise_identity(&consensuses, cfg);
+    let medoid = analysis_blocks::pick_medoid(consensuses.len(), &pairs);
+    let min_id = pairs
+        .iter()
+        .map(|p| p.identity)
+        .fold(f64::INFINITY, f64::min);
+    log::debug!(
+        target: "kitehor::detect::analysis_blocks",
+        "{}: blocks={} cmp_w={} pairs={} min_id={:.3} medoid={:?}",
+        arr.id,
+        blocks.len(),
+        comparison_width,
+        pairs.len(),
+        min_id,
+        medoid,
+    );
+}
+
+
 /// M4 per-array work: produces a real `class` + supporting fields by
 /// running the classify module over `width_features`. Then layers M3.5
 /// Pass-B phase-shift offset recovery on top, using the chosen
@@ -209,6 +291,15 @@ fn run_array_m4(
         props_m35.inter_monomer_identity = None;
     }
     props_m35.reason = decision.reason;
+
+    // M7.1: compute the analysis-block consensus-identity stats
+    // for HOR / irregular_HOR arrays. This pass is observational
+    // — the actual mixed override that consumes the stats lands
+    // in M7.2. Result is logged at debug level so it's visible
+    // when calibrating without affecting any class call.
+    if matches!(props_m35.class, Class::HOR | Class::IrregularHOR) {
+        compute_analysis_block_diagnostics(arr, &props_m35, cfg);
+    }
 
     // DH3: copy irregularity_score from the chosen base_width's
     // width_features row. Demote HOR → irregular_HOR when the score

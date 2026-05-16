@@ -15,14 +15,34 @@ use std::path::{Path, PathBuf};
 /// `width`. Drops trailing partial rows. Returns `None` if fewer
 /// than 2 rows fit at this width.
 pub fn consensus(seq: &[u8], width: usize) -> Option<Vec<u8>> {
-    if width == 0 || seq.len() < 2 * width {
+    consensus_on_slice(seq, width, 0, usize::MAX)
+}
+
+/// Per-block consensus: wrap `seq` at `width`, take rows in
+/// `[start_row, end_row)`, and return the majority-vote consensus
+/// over that range. `end_row` is clamped to the number of complete
+/// rows available. Returns `None` if fewer than 2 rows are in the
+/// requested range (matches the whole-array `consensus` floor).
+///
+/// M7.1: load-bearing helper for `analysis_blocks::block_consensus`.
+pub fn consensus_on_slice(
+    seq: &[u8],
+    width: usize,
+    start_row: usize,
+    end_row: usize,
+) -> Option<Vec<u8>> {
+    if width == 0 {
         return None;
     }
-    let n_rows = seq.len() / width;
+    let n_rows_total = seq.len() / width;
+    let end = end_row.min(n_rows_total);
+    if start_row >= end || end - start_row < 2 {
+        return None;
+    }
     let mut out = Vec::with_capacity(width);
     for c in 0..width {
         let mut counts = [0usize; 4]; // A, C, G, T
-        for r in 0..n_rows {
+        for r in start_row..end {
             match seq[r * width + c] {
                 b'A' => counts[0] += 1,
                 b'C' => counts[1] += 1,
@@ -145,6 +165,49 @@ mod tests {
             .collect();
         let cs = consensus(&seq, 1).unwrap();
         assert_eq!(cs, vec![b'A']);
+    }
+
+    // M7.1: per-block consensus helper.
+    #[test]
+    fn consensus_on_slice_matches_whole_array_consensus_when_full() {
+        let seq = b"AAAACGTACGTACGTACGTA".to_vec();
+        let whole = consensus(&seq, 4).unwrap();
+        let sliced = consensus_on_slice(&seq, 4, 0, usize::MAX).unwrap();
+        assert_eq!(whole, sliced);
+    }
+
+    #[test]
+    fn consensus_on_slice_restricts_to_block_rows() {
+        // 4 rows × width 4. Rows 0-1 are AAAA; rows 2-3 are GGGG.
+        let mut seq = Vec::with_capacity(16);
+        seq.extend_from_slice(b"AAAAAAAA");
+        seq.extend_from_slice(b"GGGGGGGG");
+        let first_block = consensus_on_slice(&seq, 4, 0, 2).unwrap();
+        let second_block = consensus_on_slice(&seq, 4, 2, 4).unwrap();
+        assert_eq!(first_block, b"AAAA");
+        assert_eq!(second_block, b"GGGG");
+    }
+
+    #[test]
+    fn consensus_on_slice_clamps_end_row() {
+        // 2 rows × width 4; ask for rows 0..1000 → still 2 rows.
+        let seq = b"AAAAAAAA".to_vec();
+        let c = consensus_on_slice(&seq, 4, 0, 1000).unwrap();
+        assert_eq!(c, b"AAAA");
+    }
+
+    #[test]
+    fn consensus_on_slice_returns_none_for_single_row() {
+        // 4 rows but slice picks just 1 row → None.
+        let seq = b"AAAACCCCGGGGTTTT".to_vec();
+        assert!(consensus_on_slice(&seq, 4, 0, 1).is_none());
+    }
+
+    #[test]
+    fn consensus_on_slice_returns_none_for_empty_range() {
+        let seq = b"AAAACCCC".to_vec();
+        assert!(consensus_on_slice(&seq, 4, 2, 2).is_none());
+        assert!(consensus_on_slice(&seq, 4, 5, 1).is_none());
     }
 
     #[test]

@@ -74,6 +74,27 @@ pub struct DetectorConfig {
     /// (irregularity_score) exceeds this. Default 0.30 (DH3).
     pub irregularity_demote_threshold: f64,
 
+    // M7 — analysis blocks for same-width mixed detection
+    // (`docs/new/detect_m7_plan.md` Q1 + Q8).
+    /// Upper bound on the number of internal analysis blocks used
+    /// per array for the mixed-detection consensus-identity test.
+    /// `block_rows = max(min_segment_rows, ceil(n_rows / max_segments_per_array))`.
+    pub max_segments_per_array: usize,
+    /// Minimum rows in an analysis block. Smaller blocks are
+    /// merged into their neighbour or dropped before the
+    /// identity test.
+    pub min_segment_rows: usize,
+    /// Minimum non-N positions (as a fraction of the consensus
+    /// length) required for a pairwise identity comparison to be
+    /// admitted into the mixed-override test. Pairs below this
+    /// floor return `None` (uninformative).
+    pub min_identity_coverage: f64,
+    /// For HOR / irregular_HOR arrays, the comparison consensus
+    /// is built at `hor_length_bp` only when each analysis block
+    /// contains at least this many complete HOR units. Otherwise
+    /// fall back to `base_width_bp`.
+    pub min_complete_units_per_block: usize,
+
     // Confidence
     pub confidence_weights: ConfidenceWeights,
 }
@@ -154,6 +175,12 @@ impl Default for DetectorConfig {
             stratification_diff_threshold: 0.80,
             irregularity_demote_threshold: 0.50,
 
+            // M7 defaults (`docs/new/detect_m7_plan.md` Q8).
+            max_segments_per_array: 32,
+            min_segment_rows: 20,
+            min_identity_coverage: 0.70,
+            min_complete_units_per_block: 3,
+
             confidence_weights: ConfidenceWeights::default(),
         }
     }
@@ -195,6 +222,30 @@ impl DetectorConfig {
                 "stratification_diff_threshold ({}) must be <= stratification_same_threshold ({})",
                 self.stratification_diff_threshold,
                 self.stratification_same_threshold
+            );
+        }
+        if self.max_segments_per_array < 2 {
+            anyhow::bail!(
+                "max_segments_per_array ({}) must be >= 2",
+                self.max_segments_per_array
+            );
+        }
+        if self.min_segment_rows < 2 {
+            anyhow::bail!(
+                "min_segment_rows ({}) must be >= 2",
+                self.min_segment_rows
+            );
+        }
+        if !(0.0..=1.0).contains(&self.min_identity_coverage) {
+            anyhow::bail!(
+                "min_identity_coverage ({}) must be in [0, 1]",
+                self.min_identity_coverage
+            );
+        }
+        if self.min_complete_units_per_block < 1 {
+            anyhow::bail!(
+                "min_complete_units_per_block ({}) must be >= 1",
+                self.min_complete_units_per_block
             );
         }
         Ok(())
