@@ -4,15 +4,35 @@ Local-only notes for working in this repo with Claude Code.
 
 ## What this is
 
-Sequence-agnostic HOR detector. Workhorse subcommand:
+Sequence-agnostic HOR detector. Two pipelines coexist:
 
-```
-kitehor kite-periodicity <fasta> -o out.tsv --classify
-```
+1. **Rule classifier on kite peaks** (workhorse):
+   ```
+   kitehor kite-periodicity <fasta> -o out.tsv --classify
+   ```
+   Runs kite → 4-condition rule (`src/rule.rs`): HOR ⟺ d1 = k×p_n
+   for k ∈ [2, 30] with p_n in top-3 by score. See `docs/rule.md`.
 
-That runs kite → 4-condition rule (`src/rule.rs`): HOR ⟺ d1 = k×p_n
-for k ∈ [2, 30] with p_n in top-3 by score. See `docs/rule.md` for the
-algorithm and the empirical study that produced it.
+2. **v2 line-width detector** (`docs/new/detect_spec.md`):
+   ```
+   kitehor detect <fasta> --periods <periods.tsv> -o <prefix>
+   ```
+   Consumes a `periods.tsv` (v2 schema) and produces
+   `<prefix>.properties.tsv` / `.segments.tsv` / `.width_features.tsv` /
+   `.diagnostics.json` / `.consensus.fa`. Calibration baseline:
+   94.4% per-class accuracy on the 1600-case `ground_truth_v2/` benchmark.
+
+3. **Combined pipeline** (kite candidates → detector):
+   ```
+   kitehor kite-periodicity <fasta> -o /tmp/kite.tsv --classify \
+       --emit-periods /tmp/kite.periods.tsv
+   kitehor detect <fasta> --periods /tmp/kite.periods.tsv -o /tmp/det \
+       --allow-missing-periods
+   ```
+   Score mapping in `src/emit_periods.rs`: founder=0.95,
+   tile=0.90, other top-3=0.60; ambiguous verdicts (`Unresolved`)
+   emit hints at 0.50/0.40/0.30. `--allow-missing-periods` is
+   needed only if kite produced NoSignal for any record.
 
 The earlier ML pipeline (RF + Platt + k-recovery + homology) is still
 available via `--use-ml-classifier`. It is over-sensitive on real
@@ -28,6 +48,8 @@ src/                  Rust crate (lib + bin)
   rule.rs             default HOR classifier (4-condition rule)
   classifier.rs       legacy ML loader (RF + Platt); used only under --use-ml-classifier
   classify.rs         legacy ML verdict orchestrator
+  emit_periods.rs     bridge: kite output → v2 detector periods.tsv
+  detect/             ← v2 line-width detector (`kitehor detect*`)
   simulate*.rs        legacy params.tsv-driven simulator (training corpus)
   synth/              ← v2 YAML-driven simulator (`kitehor synth*`)
 config/classifier.toml legacy ML thresholds (only consulted with --use-ml-classifier)
@@ -117,6 +139,30 @@ for the implementation contract and milestone acceptance gates.
 - **v2 simulator full benchmark** (1600-case corpus): generated
   outputs are gitignored under `ground_truth_v2/out/`; regen with
   `./ground_truth_v2/run_batch.sh` (~2 s wall on 16 CPUs).
+
+- **v2 detector** (consumes simulator-emitted periods):
+  ```
+  ./target/release/kitehor detect-batch \
+      --fasta-dir ground_truth_v2/out \
+      --periods-dir ground_truth_v2/out \
+      --out-dir ground_truth_v2/det_out
+  python3 tools/detect_eval/eval.py \
+      --manifest ground_truth_v2/manifest.tsv \
+      --properties-dir ground_truth_v2/det_out
+  ```
+  Calibration baseline 94.4% (M6 acceptance gate).
+
+- **Combined pipeline smoke** (kite → emit-periods → detect):
+  ```
+  ./target/release/kitehor kite-periodicity \
+      test_data/smoke/sequences.fasta -o /tmp/smoke.kite.tsv \
+      --classify --emit-periods /tmp/smoke.kite.periods.tsv
+  ./target/release/kitehor detect \
+      test_data/smoke/sequences.fasta \
+      --periods /tmp/smoke.kite.periods.tsv -o /tmp/smoke.det \
+      --allow-missing-periods
+  ```
+  Reads `/tmp/smoke.det.properties.tsv` for per-record classes.
 
 ## Data policy
 

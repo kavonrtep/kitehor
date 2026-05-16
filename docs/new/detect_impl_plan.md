@@ -126,6 +126,25 @@ to where in this plan the change applied.
   - single-run `detect` now mirrors batch-mode DH11: periods rows
     whose `array_id` matches no FASTA record are a hard error
     unless `--allow-extra-periods` is set (review #11, low).
+- **A17 — kite → detector integration**
+  (settled in the 2026-05-16 integration discussion). Affects §7 (CLI).
+  `kitehor kite-periodicity --emit-periods <path>` writes a v2
+  `periods.tsv` directly so the same FASTA can run end-to-end as
+  `kite-periodicity --emit-periods` → `detect --periods`. Score
+  mapping in `src/emit_periods.rs`, chosen relative to
+  `DetectorConfig::strong_period_score` (0.85):
+  - founder → 0.95 (`kite_founder`),
+  - tile → 0.90 (`kite_tile`, only when ≠ founder),
+  - other top-3 kite peaks → 0.60 (`kite_secondary`),
+  - `Unresolved` verdict → top-3 hints @ 0.50 / 0.40 / 0.30
+    (`kite_peak`),
+  - `NoSignal` → no rows (use `detect --allow-missing-periods`
+    to keep the record in the output as `ambiguous`),
+  - no `--classify` → raw top-3 @ 0.60 hints (`kite_peak`).
+  Tradeoff: separate emit-periods → detect glue keeps each stage
+  individually debuggable (you can inspect the periods file
+  before running detect). A combined `kitehor analyze` subcommand
+  is a possible follow-up once the integration is stable.
 - **A16 — deferred from review-2026-05-16** (high findings #2 + #3).
   Not yet addressed; documented here so the trade-off is explicit:
   - **Per-segment recompute (#2).** `segment::split()` still emits

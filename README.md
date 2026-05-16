@@ -72,6 +72,17 @@ kitehor kite-periodicity input.fasta -o predictions.tsv --classify
 # Periodicity + legacy ML classifier (opt-in).
 kitehor kite-periodicity input.fasta -o predictions.tsv --classify --use-ml-classifier
 
+# v2 line-width detector (sequence-agnostic; consumes a periods.tsv).
+kitehor detect input.fasta --periods periods.tsv -o out_prefix
+kitehor detect-batch \
+    --fasta-dir corpus/ --periods-dir corpus/ --out-dir det_out/
+
+# Combined pipeline: kite candidates → v2 detector.
+kitehor kite-periodicity input.fasta -o predictions.tsv --classify \
+    --emit-periods kite.periods.tsv
+kitehor detect input.fasta --periods kite.periods.tsv -o det_out \
+    --allow-missing-periods   # if kite returned NoSignal for any record
+
 # Simulate one synthetic array.
 kitehor simulate --monomer-size 171 --multiplicity 12 --copies 100 -o sim.fa
 
@@ -119,6 +130,46 @@ Adds: `cov_mean`, `cov_pass_70`, `cov_pass_80`, `cov_pass_90`,
 `cov_n_tiles`. Non-HOR rows get NA. Supplementary only — it does not
 enter the HOR decision. See [docs/rule.md](docs/rule.md) for what the
 score does and does not catch.
+
+### v2 line-width detector (`kitehor detect*`)
+
+A sequence-agnostic, threshold-rule classifier that operates on row
+embeddings of the input FASTA. Reads a `periods.tsv` (v2 schema:
+`array_id\tperiod_bp\tperiod_score\tsource`) and writes a fixed
+property bundle per record:
+
+| Output | Contents |
+|---|---|
+| `{prefix}.properties.tsv`     | Per-record class + base width, k, IC, phase_sep, wobble, n_phase_shifts, irregularity, confidence |
+| `{prefix}.width_features.tsv` | One row per tested width with R(k), IC, edge rates, class hint |
+| `{prefix}.segments.tsv`       | Per-segment rows when n_phase_shifts > 0 |
+| `{prefix}.diagnostics.json`   | Structured per-array reason + all of the above |
+| `{prefix}.consensus.fa`       | Monomer + HOR-unit consensuses (only for resolved classes) |
+
+Classes: `HOR`, `irregular_HOR`, `simple_TR`, `mixed`, `ambiguous`.
+M6 calibration baseline: **94.4%** per-class accuracy on the
+1600-case `ground_truth_v2/` benchmark (≥ 92% target met). Design
+contract: [`docs/new/detect_impl_plan.md`](docs/new/detect_impl_plan.md).
+
+### Combined pipeline (kite → detector)
+
+`kite-periodicity --emit-periods` writes a v2-compatible
+`periods.tsv` so kite candidates can drive the line-width detector
+in one shell pipeline. Score mapping
+(`src/emit_periods.rs`):
+
+| Rule verdict | Rows written |
+|---|---|
+| `Hor{founder, tile}` | founder @ 0.95, tile @ 0.90 (if distinct), other top-3 @ 0.60 |
+| `Tandem{monomer}`    | monomer @ 0.95, other top-3 @ 0.60 |
+| `Unresolved`         | top-3 peaks @ 0.50 / 0.40 / 0.30 (hints) |
+| `NoSignal`           | no rows (pass `--allow-missing-periods` to detect) |
+| no `--classify`      | top-3 peaks @ 0.60 (hints) |
+
+Scores are chosen relative to the detector's
+`strong_period_score = 0.85` gate: values ≥ that floor can fire HOR
+rescue paths; below-floor scores act as hints to the canonical
+column-IC test only.
 
 ### Legacy ML classifier (`--use-ml-classifier`)
 
@@ -215,6 +266,8 @@ but will agree at the population level.
 src/                   Rust crate
   rule.rs              default HOR classifier (4-condition rule)
   classifier.rs        legacy ML loader (RF + Platt); --use-ml-classifier only
+  emit_periods.rs      kite → v2 detector periods.tsv bridge
+  detect/              v2 line-width detector (kitehor detect*)
   simulate*.rs         legacy params.tsv-driven simulator
   synth/               v2 YAML-driven simulator (kitehor synth*)
 config/classifier.toml Thresholds, Platt coefs, imputation medians
