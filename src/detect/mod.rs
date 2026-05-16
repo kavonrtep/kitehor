@@ -48,6 +48,7 @@ pub fn run_one(
     out_prefix: &Path,
     cfg: &DetectorConfig,
     viz_flags: &VizFlags,
+    allow_missing_periods: bool,
 ) -> Result<DetectorReport> {
     cfg.validate()?;
     let arrays = io::load_arrays(fasta)?;
@@ -56,15 +57,24 @@ pub fn run_one(
         .file_stem()
         .and_then(|s| s.to_str())
         .map(|s| s.to_string());
-    let paired = io::join_arrays_with_periods(arrays, periods_by_id, default_stem.as_deref())?;
+    let paired = io::join_arrays_with_periods(
+        arrays,
+        periods_by_id,
+        default_stem.as_deref(),
+        allow_missing_periods,
+    )?;
 
     let mut properties: Vec<Properties> = Vec::with_capacity(paired.len());
-    let segments: Vec<Segment> = Vec::new();
+    let mut segments: Vec<Segment> = Vec::new();
     let mut width_features: Vec<WidthFeatures> = Vec::new();
     let mut consensus_records: Vec<ConsensusRecord> = Vec::new();
 
     for (arr, pers) in &paired {
         let (props, mut widths) = run_array_m4(arr, pers, cfg);
+        // DH2: emit one Segment row per inter-shift region when
+        // n_phase_shifts > 0.
+        let mut new_segments = segment::split(&props);
+        segments.append(&mut new_segments);
         // M5: build consensus + viz when we have a chosen base width.
         if let Some(base_w) = props.base_width_bp {
             if let Some(monomer) = consensus::consensus(&arr.seq, base_w) {
@@ -89,6 +99,7 @@ pub fn run_one(
     io::write_properties(out_prefix, &properties)?;
     io::write_segments(out_prefix, &segments)?;
     io::write_width_features(out_prefix, &width_features)?;
+    io::write_diagnostics(out_prefix, &properties, &width_features, &segments)?;
     if !consensus_records.is_empty() {
         consensus::write_fasta(out_prefix, &consensus_records)?;
     }
@@ -151,6 +162,9 @@ fn run_array_m4(
     cfg: &DetectorConfig,
 ) -> (Properties, Vec<WidthFeatures>) {
     let (mut props_m35, widths) = run_array_m3_5(arr, pers, cfg);
+    // DH4: capture the pre-decision width BEFORE the classify-result
+    // copy overwrites props_m35.base_width_bp.
+    let pre_decision_width = props_m35.base_width_bp;
     let decision = classify::decide_array(arr, pers, &widths, cfg);
 
     // Copy decision fields into properties.
@@ -163,6 +177,26 @@ fn run_array_m4(
     props_m35.phase_separation = decision.phase_separation;
     props_m35.inter_monomer_identity = decision.inter_monomer_identity;
     props_m35.reason = decision.reason;
+
+    // DH3: copy irregularity_score from the chosen base_width's
+    // width_features row. Demote HOR → irregular_HOR when the score
+    // exceeds the calibrated threshold.
+    if let Some(bw) = props_m35.base_width_bp {
+        if let Some(w) = widths.iter().find(|w| w.width_bp == bw) {
+            props_m35.irregularity_score = w.irregularity_score;
+            if matches!(props_m35.class, Class::HOR) {
+                if let Some(irr) = w.irregularity_score {
+                    if irr >= cfg.irregularity_demote_threshold {
+                        props_m35.class = Class::IrregularHOR;
+                        props_m35.reason = format!(
+                            "{} (irregular_HOR — block-level IC variance {:.3} ≥ {:.3})",
+                            props_m35.reason, irr, cfg.irregularity_demote_threshold
+                        );
+                    }
+                }
+            }
+        }
+    }
     // M6: compute confidence over the populated property fields.
     props_m35.confidence = Some(confidence::compute(&props_m35, cfg));
 
@@ -170,7 +204,7 @@ fn run_array_m4(
     // heuristic, rerun Pass-A/B at the new base_width to keep the
     // phase-shift positions/offsets consistent.
     if let Some(target_w) = decision.base_width_bp {
-        let already_done = props_m35.base_width_bp == Some(target_w);
+        let already_done = pre_decision_width == Some(target_w);
         if !already_done {
             if let Some(w_features) = widths.iter().find(|w| w.width_bp == target_w) {
                 if w_features.rows >= 2 {
@@ -264,9 +298,115 @@ fn run_array_m3_5(
     (props, widths)
 }
 
+/// Width-feature builder: per-width compute used by M3+. Returns the
+/// fully populated `WidthFeatures` row (DH6: includes phase_separation,
+/// irregularity_score, and class_hint).
+fn build_width_features(
+    arr: &ArrayRecord,
+    width: usize,
+    bg: &wrap::Background,
+    cfg: &DetectorConfig,
+) -> WidthFeatures {
+    let stats = wrap::wrap_and_ic(&arr.seq, width, bg, cfg);
+    let (rows, ic, fc) = match &stats {
+        Some(s) => (s.n_rows, Some(s.mean_column_ic), Some(s.fraction_conserved)),
+        None => (0usize, None, None),
+    };
+    let mut row = WidthFeatures {
+        array_id: arr.id.clone(),
+        width_bp: width,
+        rows,
+        column_ic: ic,
+        fraction_conserved_columns: fc,
+        row_lag1_similarity: None,
+        best_lag: None,
+        best_lag_score: None,
+        phase_separation: None,
+        vertical_edge_rate: None,
+        column_edge_autocorr_k: None,
+        column_edge_autocorr_score: None,
+        mean_shift_bp: None,
+        wobble_amplitude_bp: None,
+        n_phase_shifts: 0,
+        irregularity_score: None,
+        class_hint: ClassHint::UnsupportedWidth,
+    };
+    if stats.is_none() {
+        return row;
+    }
+
+    // R(k) → phase_separation, primitive-corrected best lag.
+    let embs = embed::embed_rows(&arr.seq, width, cfg);
+    let ac = autocorr::compute(&embs, cfg.max_hor_k);
+    row.row_lag1_similarity = ac.r_lag1;
+    row.best_lag_score = ac.best_lag_score;
+    let best_k_raw = ac.best_lag.unwrap_or(1);
+    let best_k = if !ac.r_k.is_empty() {
+        phase::primitive_correct(&ac.r_k, best_k_raw, cfg.primitive_correction_delta)
+    } else {
+        best_k_raw
+    };
+    row.best_lag = Some(best_k);
+    if best_k >= 2 && !ac.r_k.is_empty() {
+        row.phase_separation = Some(phase::phase_separation(&ac.r_k, best_k));
+    } else {
+        row.phase_separation = Some(0.0);
+    }
+
+    // Edge field.
+    if rows >= 2 {
+        if let Some(e) = edges::compute(&arr.seq, width, rows) {
+            row.vertical_edge_rate = Some(e.vertical_edge_rate);
+            row.column_edge_autocorr_k = e.column_edge_autocorr_k;
+            row.column_edge_autocorr_score = e.column_edge_autocorr_score;
+        }
+    }
+
+    // Pass-A shift signal.
+    if rows >= 2 {
+        if let Some(s) = shift::compute(&arr.seq, width, rows, cfg) {
+            row.mean_shift_bp = Some(s.mean_shift_bp);
+            row.wobble_amplitude_bp = Some(s.wobble_amplitude_bp);
+            row.n_phase_shifts = s.breakpoints.len();
+        }
+    }
+
+    // Irregularity (block-variance metric, A4 / DH3).
+    row.irregularity_score = irregularity::compute(&arr.seq, width, bg, cfg);
+
+    // Class hint per-width: cheap heuristic that lets calibration
+    // see what each width "looks like" without re-running classify.
+    row.class_hint = class_hint_for(&row, cfg);
+    row
+}
+
+fn class_hint_for(w: &WidthFeatures, cfg: &DetectorConfig) -> ClassHint {
+    let ic = w.column_ic.unwrap_or(0.0);
+    if ic < cfg.ic_threshold_min || w.rows < cfg.min_rows_per_width {
+        return ClassHint::UnsupportedWidth;
+    }
+    let r1 = w.row_lag1_similarity.unwrap_or(0.0);
+    let phase = w.phase_separation.unwrap_or(0.0);
+    let best_lag = w.best_lag.unwrap_or(1);
+    if best_lag >= 2
+        && phase >= cfg.phase_separation_threshold
+        && r1 >= cfg.regime_c_r1_threshold
+        && ic >= cfg.ic_threshold_hor_base
+    {
+        return ClassHint::HORBaseWidth { k: best_lag };
+    }
+    if r1 >= 0.95 && ic >= cfg.ic_threshold_hor_unit {
+        return ClassHint::HORUnitWidth;
+    }
+    if ic >= cfg.ic_threshold_simple_tr && phase < cfg.phase_separation_threshold {
+        return ClassHint::SimpleTRBaseWidth;
+    }
+    ClassHint::UnsupportedWidth
+}
+
 /// M3 per-array work: M2 + edge field + Pass-A shift signal.
-/// Fills `vertical_edge_rate`, `column_edge_autocorr_*`,
-/// `mean_shift_bp`, `wobble_amplitude_bp`, `n_phase_shifts`.
+/// DH6: now populates phase_separation, irregularity_score, and
+/// class_hint via `build_width_features`.
 fn run_array_m3(
     arr: &ArrayRecord,
     pers: &[PeriodCandidate],
@@ -274,67 +414,10 @@ fn run_array_m3(
 ) -> (Properties, Vec<WidthFeatures>) {
     let bg = wrap::Background::compute(&arr.seq);
     let widths = widths::expand(pers, cfg, arr.length);
-    let mut out = Vec::with_capacity(widths.len());
-    for w in widths {
-        let stats = wrap::wrap_and_ic(&arr.seq, w, &bg, cfg);
-        let (rows, ic, fc) = match &stats {
-            Some(s) => (s.n_rows, Some(s.mean_column_ic), Some(s.fraction_conserved)),
-            None => (0usize, None, None),
-        };
-        let (r_lag1, best_lag, best_lag_score) = if stats.is_some() {
-            let embs = embed::embed_rows(&arr.seq, w, cfg);
-            let summary = autocorr::compute(&embs, cfg.max_hor_k);
-            (summary.r_lag1, summary.best_lag, summary.best_lag_score)
-        } else {
-            (None, None, None)
-        };
-        let edge = if rows >= 2 {
-            edges::compute(&arr.seq, w, rows)
-        } else {
-            None
-        };
-        let shift = if rows >= 2 {
-            shift::compute(&arr.seq, w, rows, cfg)
-        } else {
-            None
-        };
-        let (vertical_edge_rate, column_edge_autocorr_k, column_edge_autocorr_score) =
-            match &edge {
-                Some(e) => (
-                    Some(e.vertical_edge_rate),
-                    e.column_edge_autocorr_k,
-                    e.column_edge_autocorr_score,
-                ),
-                None => (None, None, None),
-            };
-        let (mean_shift_bp, wobble_amplitude_bp, n_phase_shifts) = match &shift {
-            Some(s) => (
-                Some(s.mean_shift_bp),
-                Some(s.wobble_amplitude_bp),
-                s.breakpoints.len(),
-            ),
-            None => (None, None, 0),
-        };
-        out.push(WidthFeatures {
-            array_id: arr.id.clone(),
-            width_bp: w,
-            rows,
-            column_ic: ic,
-            fraction_conserved_columns: fc,
-            row_lag1_similarity: r_lag1,
-            best_lag,
-            best_lag_score,
-            phase_separation: None, // M4
-            vertical_edge_rate,
-            column_edge_autocorr_k,
-            column_edge_autocorr_score,
-            mean_shift_bp,
-            wobble_amplitude_bp,
-            n_phase_shifts,
-            irregularity_score: None, // M4
-            class_hint: ClassHint::UnsupportedWidth, // M4
-        });
-    }
+    let out: Vec<WidthFeatures> = widths
+        .into_iter()
+        .map(|w| build_width_features(arr, w, &bg, cfg))
+        .collect();
     (Properties::placeholder(&arr.id, arr.length), out)
 }
 
@@ -353,19 +436,29 @@ pub fn run_batch(
     out_dir: &Path,
     cfg: &DetectorConfig,
     viz_flags: &VizFlags,
+    allow_missing_periods: bool,
+    allow_extra_periods: bool,
 ) -> Result<usize> {
     use rayon::prelude::*;
     std::fs::create_dir_all(out_dir)?;
-    let pairs = discover_pairs(fasta_dir, periods_dir)?;
+    let pairs = discover_pairs(fasta_dir, periods_dir, allow_extra_periods)?;
     let n = pairs.len();
     pairs.par_iter().try_for_each(|(fa, pe, stem)| -> Result<()> {
         let prefix = out_dir.join(stem);
-        run_one(fa, pe, &prefix, cfg, viz_flags).map(|_| ())
+        run_one(fa, pe, &prefix, cfg, viz_flags, allow_missing_periods).map(|_| ())
     })?;
     Ok(n)
 }
 
-fn discover_pairs(fasta_dir: &Path, periods_dir: &Path) -> Result<Vec<(std::path::PathBuf, std::path::PathBuf, String)>> {
+fn discover_pairs(
+    fasta_dir: &Path,
+    periods_dir: &Path,
+    allow_extra_periods: bool,
+) -> Result<Vec<(std::path::PathBuf, std::path::PathBuf, String)>> {
+    use std::collections::BTreeSet;
+    let mut fasta_stems: BTreeSet<String> = BTreeSet::new();
+    let mut periods_stems: BTreeSet<String> = BTreeSet::new();
+
     let mut out = Vec::new();
     for entry in std::fs::read_dir(fasta_dir)? {
         let e = entry?;
@@ -378,6 +471,7 @@ fn discover_pairs(fasta_dir: &Path, periods_dir: &Path) -> Result<Vec<(std::path
             .and_then(|s| s.to_str())
             .ok_or_else(|| anyhow::anyhow!("non-utf8 stem in {:?}", p))?
             .to_string();
+        fasta_stems.insert(stem.clone());
         let periods_path = periods_dir.join(format!("{stem}.periods.tsv"));
         if !periods_path.exists() {
             anyhow::bail!(
@@ -387,6 +481,30 @@ fn discover_pairs(fasta_dir: &Path, periods_dir: &Path) -> Result<Vec<(std::path
         }
         out.push((p, periods_path, stem));
     }
+
+    // DH11: symmetric pairing — periods TSVs without a matching FASTA
+    // are misspelled or stale. Fail unless explicitly allowed.
+    if !allow_extra_periods {
+        for entry in std::fs::read_dir(periods_dir)? {
+            let e = entry?;
+            let p = e.path();
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if !name.ends_with(".periods.tsv") {
+                continue;
+            }
+            let stem = name.trim_end_matches(".periods.tsv").to_string();
+            periods_stems.insert(stem.clone());
+        }
+        let extras: Vec<&String> = periods_stems.difference(&fasta_stems).collect();
+        if !extras.is_empty() {
+            anyhow::bail!(
+                "periods directory {:?} contains {} unmatched files: {:?}; \
+                 pass `--allow-extra-periods` to ignore them",
+                periods_dir, extras.len(), extras
+            );
+        }
+    }
+
     out.sort();
     Ok(out)
 }

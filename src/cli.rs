@@ -43,8 +43,10 @@ pub enum Command {
     /// `.deferred.yaml` placeholders are skipped.
     SynthBatch(SynthBatchArgs),
     /// v2 line-width detector. Reads FASTA + period candidates, emits
-    /// {PREFIX}.properties.tsv, .segments.tsv, .width_features.tsv.
-    /// M0 scaffolding — every property column is NA until M1+ lands.
+    /// {PREFIX}.properties.tsv, .segments.tsv, .width_features.tsv,
+    /// .consensus.fa, and (optionally) per-array visualisation TSVs/PNGs.
+    /// Experimental: per-category benchmark accuracy is still being
+    /// calibrated — see docs/new/detect_impl_plan.md.
     Detect(DetectArgs),
     /// Run `detect` over every `<stem>.fa` in a directory paired with
     /// `<stem>.periods.tsv` (parallel).
@@ -328,17 +330,16 @@ pub struct DetectArgs {
     #[arg(long)]
     pub periods: PathBuf,
     /// Output prefix; writes PREFIX.properties.tsv, .segments.tsv,
-    /// .width_features.tsv (header-only files for stages not yet
-    /// reached).
+    /// .width_features.tsv, .consensus.fa, and .diagnostics.json.
     #[arg(short, long, required = true)]
     pub out: PathBuf,
     /// Override default DetectorConfig via TOML.
     #[arg(long)]
     pub config: Option<PathBuf>,
-    /// Per-array matrix/signal export directory (M5).
+    /// Per-array matrix/signal export directory.
     #[arg(long)]
     pub viz_dir: Option<PathBuf>,
-    /// Granular viz flags (M5).
+    /// Granular viz flags. Require `--viz-dir` (DH9).
     #[arg(long)]
     pub export_raster: bool,
     #[arg(long)]
@@ -347,6 +348,9 @@ pub struct DetectArgs {
     pub export_edges: bool,
     #[arg(long)]
     pub export_ic: bool,
+    /// Downgrade missing-periods errors to warnings (DH5).
+    #[arg(long)]
+    pub allow_missing_periods: bool,
     /// Number of rayon worker threads (0 = auto).
     #[arg(long, default_value_t = 0)]
     pub threads: usize,
@@ -366,9 +370,25 @@ pub struct DetectBatchArgs {
     /// Override default DetectorConfig via TOML.
     #[arg(long)]
     pub config: Option<PathBuf>,
-    /// Per-array matrix/signal export directory (M5).
+    /// Per-array matrix/signal export directory.
     #[arg(long)]
     pub viz_dir: Option<PathBuf>,
+    /// Granular viz flags (DH10 — mirror `detect`).
+    #[arg(long)]
+    pub export_raster: bool,
+    #[arg(long)]
+    pub export_shift: bool,
+    #[arg(long)]
+    pub export_edges: bool,
+    #[arg(long)]
+    pub export_ic: bool,
+    /// Downgrade missing-periods errors to warnings (DH5).
+    #[arg(long)]
+    pub allow_missing_periods: bool,
+    /// Allow periods TSVs without a matching FASTA stem in the batch
+    /// (DH11 — symmetric pairing is the default).
+    #[arg(long)]
+    pub allow_extra_periods: bool,
     #[arg(long, default_value_t = 0)]
     pub threads: usize,
 }

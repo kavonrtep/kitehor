@@ -123,10 +123,17 @@ pub fn load_periods(path: &Path) -> Result<HashMap<String, Vec<PeriodCandidate>>
 /// Join FASTA records with their period candidates. Returns
 /// `(array, periods)` pairs. The `default_array_id` is used when the
 /// periods TSV had no `array_id` column (single-record convention).
+///
+/// When `allow_missing` is `false` (default), a FASTA record with no
+/// matching period rows is a hard error — see review finding DH5.
+/// Pass `--allow-missing-periods` on the CLI to downgrade it to a
+/// warning (the array then runs with no candidate widths and ends up
+/// `ambiguous`).
 pub fn join_arrays_with_periods(
     arrays: Vec<ArrayRecord>,
     mut periods: HashMap<String, Vec<PeriodCandidate>>,
     default_array_id: Option<&str>,
+    allow_missing: bool,
 ) -> Result<Vec<(ArrayRecord, Vec<PeriodCandidate>)>> {
     let mut out = Vec::with_capacity(arrays.len());
     for arr in arrays {
@@ -137,14 +144,20 @@ pub fn join_arrays_with_periods(
         } else if let Some(stem) = default_array_id {
             periods.remove(stem).unwrap_or_default()
         } else {
-            // Maybe stored under empty-string array_id
             periods.remove("").unwrap_or_default()
         };
         if pers.is_empty() {
-            log::warn!(
-                "no period candidates for FASTA record `{}` — detector will fall back to UnsupportedWidth",
-                arr.id
-            );
+            if allow_missing {
+                log::warn!(
+                    "no period candidates for FASTA record `{}` — detector will fall back to UnsupportedWidth (`--allow-missing-periods` is set)",
+                    arr.id
+                );
+            } else {
+                anyhow::bail!(
+                    "no period candidates for FASTA record `{}`; pass `--allow-missing-periods` to downgrade to a warning",
+                    arr.id
+                );
+            }
         }
         out.push((arr, pers));
     }
@@ -161,6 +174,10 @@ pub fn segments_path(prefix: &Path) -> PathBuf {
 }
 pub fn width_features_path(prefix: &Path) -> PathBuf {
     with_ext(prefix, "width_features.tsv")
+}
+
+pub fn diagnostics_path(prefix: &Path) -> PathBuf {
+    with_ext(prefix, "diagnostics.json")
 }
 
 fn with_ext(prefix: &Path, ext: &str) -> PathBuf {
@@ -203,6 +220,107 @@ pub fn write_width_features(prefix: &Path, rows: &[WidthFeatures]) -> Result<()>
     for r in rows {
         writeln!(f, "{}", width_features_to_tsv(r))?;
     }
+    Ok(())
+}
+
+/// Write a structured per-run summary (`PREFIX.diagnostics.json`)
+/// containing the final decision per array, the chosen base width,
+/// the supporting evidence, and the top tested widths. DH12.
+pub fn write_diagnostics(
+    prefix: &Path,
+    properties: &[Properties],
+    width_features: &[WidthFeatures],
+    segments: &[Segment],
+) -> Result<()> {
+    use serde_json::json;
+    let path = diagnostics_path(prefix);
+    ensure_parent(&path)?;
+
+    // Group width_features by array_id for compact per-array
+    // diagnostic blocks.
+    let mut by_array: std::collections::HashMap<&str, Vec<&WidthFeatures>> =
+        std::collections::HashMap::new();
+    for w in width_features {
+        by_array.entry(w.array_id.as_str()).or_default().push(w);
+    }
+    let mut segs_by_array: std::collections::HashMap<&str, Vec<&Segment>> =
+        std::collections::HashMap::new();
+    for s in segments {
+        segs_by_array.entry(s.array_id.as_str()).or_default().push(s);
+    }
+
+    let arrays: Vec<serde_json::Value> = properties
+        .iter()
+        .map(|p| {
+            let widths: Vec<serde_json::Value> = by_array
+                .get(p.array_id.as_str())
+                .into_iter()
+                .flat_map(|v| v.iter())
+                .map(|w| {
+                    json!({
+                        "width_bp": w.width_bp,
+                        "rows": w.rows,
+                        "column_ic": w.column_ic,
+                        "fraction_conserved_columns": w.fraction_conserved_columns,
+                        "row_lag1_similarity": w.row_lag1_similarity,
+                        "best_lag": w.best_lag,
+                        "best_lag_score": w.best_lag_score,
+                        "phase_separation": w.phase_separation,
+                        "vertical_edge_rate": w.vertical_edge_rate,
+                        "mean_shift_bp": w.mean_shift_bp,
+                        "wobble_amplitude_bp": w.wobble_amplitude_bp,
+                        "n_phase_shifts": w.n_phase_shifts,
+                        "irregularity_score": w.irregularity_score,
+                        "class_hint": w.class_hint.as_str(),
+                    })
+                })
+                .collect();
+            let segs: Vec<serde_json::Value> = segs_by_array
+                .get(p.array_id.as_str())
+                .into_iter()
+                .flat_map(|v| v.iter())
+                .map(|s| {
+                    json!({
+                        "segment_id": s.segment_id,
+                        "start_bp": s.start_bp,
+                        "end_bp": s.end_bp,
+                        "class": s.class.as_str(),
+                        "base_width_bp": s.base_width_bp,
+                        "hor_k": s.hor_k,
+                    })
+                })
+                .collect();
+            json!({
+                "array_id": p.array_id,
+                "length_bp": p.length_bp,
+                "class": p.class.as_str(),
+                "base_width_bp": p.base_width_bp,
+                "hor_k": p.hor_k,
+                "hor_length_bp": p.hor_length_bp,
+                "n_complete_copies": p.n_complete_copies,
+                "column_conservation": p.column_conservation,
+                "phase_separation": p.phase_separation,
+                "wobble_amplitude_bp": p.wobble_amplitude_bp,
+                "n_phase_shifts": p.n_phase_shifts,
+                "phase_shift_positions": p.phase_shift_positions,
+                "phase_shift_offsets": p.phase_shift_offsets,
+                "irregularity_score": p.irregularity_score,
+                "inter_monomer_identity": p.inter_monomer_identity,
+                "confidence": p.confidence,
+                "reason": p.reason,
+                "width_features": widths,
+                "segments": segs,
+            })
+        })
+        .collect();
+
+    let doc = json!({
+        "schema_version": 1,
+        "n_arrays": properties.len(),
+        "arrays": arrays,
+    });
+    let s = serde_json::to_string_pretty(&doc)?;
+    std::fs::write(&path, s).with_context(|| format!("creating {:?}", path))?;
     Ok(())
 }
 

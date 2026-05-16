@@ -44,6 +44,11 @@ struct Candidate {
     /// that was collapsing. None for plain simple_TR candidates.
     /// Used to suppress harmonics of the underlying base width.
     underlying_base: Option<usize>,
+    /// Score of the matching input period (0 if width was found only
+    /// via divisor/neighborhood expansion). DH1: candidates the
+    /// upstream generator actually proposed beat expansion-only
+    /// widths when dedup'd by multiplicity.
+    input_score: f64,
 }
 
 /// Main entry point. Iterates input periods by score, evaluates each
@@ -58,16 +63,6 @@ pub fn decide_array(
     let by_width: HashMap<usize, &WidthFeatures> =
         width_features.iter().map(|w| (w.width_bp, w)).collect();
 
-    // Sort input periods by score (desc); tie-break smaller-width-first
-    // so we prefer base over harmonic at equal score.
-    let mut sorted: Vec<&PeriodCandidate> = pers.iter().collect();
-    sorted.sort_by(|a, b| {
-        b.period_score
-            .partial_cmp(&a.period_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.period_bp.cmp(&b.period_bp))
-    });
-
     if width_features.is_empty() {
         return ambiguous("no widths available");
     }
@@ -81,16 +76,37 @@ pub fn decide_array(
         return ambiguous("no width achieves ic_threshold_min");
     }
 
+    // DH1: classify over ALL supported width_features (not just the
+    // input periods). A width discovered via divisor expansion must
+    // be eligible for the final call. Input-period scores are used
+    // as a ranking prior — higher-score widths get evaluated first
+    // so their candidates appear first in the priority order, but
+    // every supported width is considered.
+    let period_score: HashMap<usize, f64> = pers
+        .iter()
+        .map(|p| (p.period_bp, p.period_score))
+        .collect();
+    let mut ordered_widths: Vec<&WidthFeatures> = width_features
+        .iter()
+        .filter(|w| w.rows >= cfg.min_rows_per_width)
+        .collect();
+    ordered_widths.sort_by(|a, b| {
+        let sa = period_score.get(&a.width_bp).copied().unwrap_or(0.0);
+        let sb = period_score.get(&b.width_bp).copied().unwrap_or(0.0);
+        // Higher score first; tie-break by smaller width first
+        // (prefer base over harmonic at equal score).
+        sb.partial_cmp(&sa)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.width_bp.cmp(&b.width_bp))
+    });
+
     let mut hor_calls_raw: Vec<Candidate> = Vec::new();
     let mut simple_calls_raw: Vec<Candidate> = Vec::new();
 
     let bg = wrap::Background::compute(&arr.seq);
-    for p in &sorted {
-        let w = match by_width.get(&p.period_bp) {
-            Some(w) if w.rows >= cfg.min_rows_per_width => *w,
-            _ => continue,
-        };
+    for w in &ordered_widths {
         let ic = w.column_ic.unwrap_or(0.0);
+        let input_score = period_score.get(&w.width_bp).copied().unwrap_or(0.0);
 
         // Recompute R(k) here so we have the full curve for primitive
         // correction + phase separation. `width_features` only stores
@@ -133,6 +149,7 @@ pub fn decide_array(
                         w.width_bp, unit_width, k_corrected
                     ),
                     underlying_base: None,
+                    input_score,
                 });
                 continue;
             }
@@ -156,6 +173,10 @@ pub fn decide_array(
                         k_corrected, unit_width, r1, ic
                     ),
                     underlying_base: Some(w.width_bp),
+                    input_score: period_score
+                        .get(&unit_width)
+                        .copied()
+                        .unwrap_or(input_score),
                 });
                 continue;
             }
@@ -194,6 +215,7 @@ pub fn decide_array(
                 n_complete_copies: w.rows,
                 reason,
                 underlying_base: None,
+                input_score,
             });
             continue;
         }
@@ -213,8 +235,33 @@ pub fn decide_array(
     //       the `hor_length_bp` of an existing HOR call. Those are
     //       the unit-band signature of the same HOR, not an
     //       independent claim.
-    let hor_calls = dedup_by_multiplicity(hor_calls_raw);
+    // DH1 follow-up: when several HOR candidates target the same
+    // `hor_length_bp` (i.e., they're all interpretations of the same
+    // underlying period via different (base_width, k) pairs), keep
+    // the one with the highest input_score — that's the upstream
+    // generator's vote for the primitive base width.
+    let hor_calls_pre = dedup_same_hor_length(hor_calls_raw);
+    let hor_calls = dedup_by_multiplicity(hor_calls_pre);
     let mut simple_calls = dedup_by_multiplicity(simple_calls_raw);
+    // Cross-list: drop any HOR whose base_width is expansion-only
+    // (input_score = 0) **and** GCD-shares structure with a
+    // simple_TR candidate of higher input_score. Catches the T01
+    // case where the expansion produced HOR(102, k=5) interpreting
+    // a harmonic of the true simple_TR base 170 (gcd 34).
+    let dropped: std::collections::HashSet<usize> = hor_calls
+        .iter()
+        .filter(|h| {
+            simple_calls.iter().any(|s| {
+                s.input_score > h.input_score
+                    && gcd(h.base_width_bp, s.base_width_bp) >= 20
+            })
+        })
+        .map(|h| h.base_width_bp)
+        .collect();
+    let hor_calls: Vec<Candidate> = hor_calls
+        .into_iter()
+        .filter(|c| !dropped.contains(&c.base_width_bp))
+        .collect();
     // Suppress any simple_TR candidate whose base_width is a multiple
     // of an existing HOR's base_width (so the HOR-unit width 12·171
     // and the harmonics 2·171, 3·171 are all absorbed into the HOR
@@ -375,18 +422,71 @@ fn mixed_decision(n: impl Into<Option<usize>>, reason: &str) -> ArrayDecision {
     }
 }
 
+/// Among HOR candidates sharing the same `hor_length_bp`, keep the
+/// one with the highest `input_score` (tie-break by smaller k).
+/// Equivalent (base_width × k) views of the same underlying period
+/// shouldn't trigger `mixed`.
+fn dedup_same_hor_length(mut v: Vec<Candidate>) -> Vec<Candidate> {
+    use std::collections::HashMap;
+    let mut best: HashMap<usize, Candidate> = HashMap::new();
+    v.sort_by(|a, b| {
+        b.input_score
+            .partial_cmp(&a.input_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.hor_k.unwrap_or(0).cmp(&b.hor_k.unwrap_or(0)))
+    });
+    for c in v.drain(..) {
+        let key = c.hor_length_bp.unwrap_or(c.base_width_bp);
+        best.entry(key).or_insert(c);
+    }
+    let mut out: Vec<Candidate> = best.into_values().collect();
+    // Stable order for downstream rules: input_score desc, then width asc.
+    out.sort_by(|a, b| {
+        b.input_score
+            .partial_cmp(&a.input_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.base_width_bp.cmp(&b.base_width_bp))
+    });
+    out
+}
+
 fn dedup_by_multiplicity(mut v: Vec<Candidate>) -> Vec<Candidate> {
-    v.sort_by_key(|c| c.base_width_bp);
+    // DH1: candidates that the upstream period generator actually
+    // emitted (`input_score > 0`) beat divisor/expansion-only widths.
+    // Within the same tier, prefer the smaller width (primitive
+    // correction). Two widths are considered the same "harmonic
+    // family" when their GCD is ≥ a minimum meaningful width — that
+    // catches integer multiples AND rationally-related widths like
+    // 170 / 255 (gcd 85). Different families remain independent
+    // (e.g. T13's 171 vs 220 with gcd 1).
+    v.sort_by(|a, b| {
+        b.input_score
+            .partial_cmp(&a.input_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.base_width_bp.cmp(&b.base_width_bp))
+    });
+    const MIN_GCD: usize = 20;
     let mut out: Vec<Candidate> = Vec::new();
     for c in v {
-        let is_multiple = out
-            .iter()
-            .any(|prev| prev.base_width_bp > 0 && c.base_width_bp % prev.base_width_bp == 0);
-        if !is_multiple {
+        let related = out.iter().any(|prev| {
+            let a = c.base_width_bp;
+            let b = prev.base_width_bp;
+            a > 0 && b > 0 && gcd(a, b) >= MIN_GCD
+        });
+        if !related {
             out.push(c);
         }
     }
     out
+}
+
+fn gcd(mut a: usize, mut b: usize) -> usize {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
 }
 
 fn recompute_ic(

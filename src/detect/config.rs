@@ -58,6 +58,9 @@ pub struct DetectorConfig {
     pub block_size_rows_min: usize,
     pub stratification_same_threshold: f64,
     pub stratification_diff_threshold: f64,
+    /// Demote `HOR` → `irregular_HOR` when block-level IC variance
+    /// (irregularity_score) exceeds this. Default 0.30 (DH3).
+    pub irregularity_demote_threshold: f64,
 
     // Confidence
     pub confidence_weights: ConfidenceWeights,
@@ -124,6 +127,7 @@ impl Default for DetectorConfig {
             block_size_rows_min: 100,
             stratification_same_threshold: 0.90,
             stratification_diff_threshold: 0.80,
+            irregularity_demote_threshold: 0.30,
 
             confidence_weights: ConfidenceWeights::default(),
         }

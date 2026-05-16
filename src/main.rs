@@ -34,7 +34,7 @@ fn main() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// detect / detect-batch (M0)
+// detect / detect-batch
 // ---------------------------------------------------------------------------
 
 fn load_detector_config(path: Option<&std::path::PathBuf>) -> Result<kitehor::detect::DetectorConfig> {
@@ -56,6 +56,13 @@ fn run_detect(args: DetectArgs) -> Result<()> {
             .ok();
     }
     let cfg = load_detector_config(args.config.as_ref())?;
+    // DH9: requesting an export without --viz-dir is a usage error.
+    let any_export = args.export_raster || args.export_shift || args.export_edges || args.export_ic;
+    if any_export && args.viz_dir.is_none() {
+        anyhow::bail!(
+            "--export-* flag was supplied without --viz-dir; specify --viz-dir <DIR> for the export root"
+        );
+    }
     let viz_flags = kitehor::detect::VizFlags {
         viz_dir: args.viz_dir.clone(),
         export_raster: args.export_raster,
@@ -69,6 +76,7 @@ fn run_detect(args: DetectArgs) -> Result<()> {
         &args.out,
         &cfg,
         &viz_flags,
+        args.allow_missing_periods,
     )?;
     info!(
         "detect: {} array(s), {} segment(s), {} width row(s); prefix {:?}",
@@ -85,9 +93,18 @@ fn run_detect_batch(args: DetectBatchArgs) -> Result<()> {
             .ok();
     }
     let cfg = load_detector_config(args.config.as_ref())?;
+    let any_export = args.export_raster || args.export_shift || args.export_edges || args.export_ic;
+    if any_export && args.viz_dir.is_none() {
+        anyhow::bail!(
+            "--export-* flag was supplied without --viz-dir; specify --viz-dir <DIR> for the export root"
+        );
+    }
     let viz_flags = kitehor::detect::VizFlags {
         viz_dir: args.viz_dir.clone(),
-        ..Default::default()
+        export_raster: args.export_raster,
+        export_shift: args.export_shift,
+        export_edges: args.export_edges,
+        export_ic: args.export_ic,
     };
     let n = kitehor::detect::run_batch(
         &args.fasta_dir,
@@ -95,6 +112,8 @@ fn run_detect_batch(args: DetectBatchArgs) -> Result<()> {
         &args.out_dir,
         &cfg,
         &viz_flags,
+        args.allow_missing_periods,
+        args.allow_extra_periods,
     )?;
     info!("detect-batch: processed {n} array(s) into {:?}", args.out_dir);
     Ok(())

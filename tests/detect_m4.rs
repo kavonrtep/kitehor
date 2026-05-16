@@ -89,6 +89,8 @@ fn synth_and_detect(corpus_yaml: &Path) -> (tempfile::TempDir, PathBuf) {
         .arg(PathBuf::from(periods))
         .arg("-o")
         .arg(&det)
+        // Random-only fixtures (T17) have no periods by design.
+        .arg("--allow-missing-periods")
         .output()
         .unwrap();
     assert!(o.status.success(), "detect failed for {stem}: {}", String::from_utf8_lossy(&o.stderr));
