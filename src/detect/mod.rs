@@ -60,7 +60,7 @@ pub fn run_one(
     let mut width_features: Vec<WidthFeatures> = Vec::new();
 
     for (arr, pers) in &paired {
-        let (props, mut widths) = run_array_m2(arr, pers, cfg);
+        let (props, mut widths) = run_array_m3(arr, pers, cfg);
         properties.push(props);
         width_features.append(&mut widths);
         // M4 will append segments.
@@ -82,10 +82,10 @@ fn run_array_m0(arr: &ArrayRecord) -> Properties {
     Properties::placeholder(&arr.id, arr.length)
 }
 
-/// M2 per-array work: M1 + oriented 4-mer row embeddings and
-/// `R(k)` autocorrelation. Fills `row_lag1_similarity`, `best_lag`,
-/// `best_lag_score` per width.
-fn run_array_m2(
+/// M3 per-array work: M2 + edge field + Pass-A shift signal.
+/// Fills `vertical_edge_rate`, `column_edge_autocorr_*`,
+/// `mean_shift_bp`, `wobble_amplitude_bp`, `n_phase_shifts`.
+fn run_array_m3(
     arr: &ArrayRecord,
     pers: &[PeriodCandidate],
     cfg: &DetectorConfig,
@@ -106,6 +106,33 @@ fn run_array_m2(
         } else {
             (None, None, None)
         };
+        let edge = if rows >= 2 {
+            edges::compute(&arr.seq, w, rows)
+        } else {
+            None
+        };
+        let shift = if rows >= 2 {
+            shift::compute(&arr.seq, w, rows, cfg)
+        } else {
+            None
+        };
+        let (vertical_edge_rate, column_edge_autocorr_k, column_edge_autocorr_score) =
+            match &edge {
+                Some(e) => (
+                    Some(e.vertical_edge_rate),
+                    e.column_edge_autocorr_k,
+                    e.column_edge_autocorr_score,
+                ),
+                None => (None, None, None),
+            };
+        let (mean_shift_bp, wobble_amplitude_bp, n_phase_shifts) = match &shift {
+            Some(s) => (
+                Some(s.mean_shift_bp),
+                Some(s.wobble_amplitude_bp),
+                s.breakpoints.len(),
+            ),
+            None => (None, None, 0),
+        };
         out.push(WidthFeatures {
             array_id: arr.id.clone(),
             width_bp: w,
@@ -115,15 +142,15 @@ fn run_array_m2(
             row_lag1_similarity: r_lag1,
             best_lag,
             best_lag_score,
-            phase_separation: None,
-            vertical_edge_rate: None,
-            column_edge_autocorr_k: None,
-            column_edge_autocorr_score: None,
-            mean_shift_bp: None,
-            wobble_amplitude_bp: None,
-            n_phase_shifts: 0,
-            irregularity_score: None,
-            class_hint: ClassHint::UnsupportedWidth, // M4 sets this
+            phase_separation: None, // M4
+            vertical_edge_rate,
+            column_edge_autocorr_k,
+            column_edge_autocorr_score,
+            mean_shift_bp,
+            wobble_amplitude_bp,
+            n_phase_shifts,
+            irregularity_score: None, // M4
+            class_hint: ClassHint::UnsupportedWidth, // M4
         });
     }
     (Properties::placeholder(&arr.id, arr.length), out)
