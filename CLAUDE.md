@@ -34,9 +34,10 @@ config/classifier.toml legacy ML thresholds (only consulted with --use-ml-classi
 models/               Legacy RF JSON (baked into binary; loaded only by ML path)
 tools/training/       R training pipeline for the legacy model
 tools/features/       Python reference feature extractors (for ML cross-check)
-ground_truth/         params.tsv + simulator helpers; sequences are regenerated
+ground_truth/         legacy params.tsv + simulator helpers; sequences regenerated
+ground_truth_v2/      ← v2 corpus spec (1600 configs in 9 categories) + run_batch.sh
 test_data/smoke/      87 KB synthetic fixture for build verification
-tests/synth_configs/  ← v2 simulator test corpus (T01–T18; 22 active + 1 deferred)
+tests/synth_configs/  ← v2 CI fixtures (T01–T18; 22 active + 1 deferred)
 examples/             validate_rf — legacy ML cross-check vs an R reference TSV
 conda/kitehor/        conda recipe (meta.yaml; built by .github/workflows/conda-release.yml)
 .github/workflows/    ci.yml, release.yml, conda-release.yml
@@ -104,7 +105,7 @@ for the implementation contract and milestone acceptance gates.
   `ground_truth/params.tsv` (1,600 cases) before running the classifier
   on it — those files are not committed.
 
-- **v2 simulator smoke**:
+- **v2 simulator smoke** (22-fixture CI corpus):
   ```
   ./target/release/kitehor synth-batch \
       --config-dir tests/synth_configs --out-dir /tmp/synth_out
@@ -112,6 +113,10 @@ for the implementation contract and milestone acceptance gates.
   Produces 22 bundles (`.fa` + `.truth.tsv` + `.periods.tsv`); the
   `T09_nested_hor.deferred.yaml` placeholder is skipped. Add
   `--diagnostics` for per-array `.diagnostics.json`.
+
+- **v2 simulator full benchmark** (1600-case corpus): generated
+  outputs are gitignored under `ground_truth_v2/out/`; regen with
+  `./ground_truth_v2/run_batch.sh` (~2 s wall on 16 CPUs).
 
 ## Data policy
 

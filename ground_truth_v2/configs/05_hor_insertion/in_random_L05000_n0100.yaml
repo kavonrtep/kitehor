@@ -1,0 +1,20 @@
+schema_version: 1
+seed: 4009814278
+global:
+  mutation_rate: 0.02
+templates:
+  t:
+    type: HOR_slots
+    monomer_length_bp: 171
+    k: 12
+    inter_slot_divergence: 0.15
+structure:
+  - type: HOR
+    template: t
+    n_copies: 100
+  - type: INSERTION
+    length_bp: 5000
+    kind: random
+  - type: HOR
+    template: t
+    n_copies: 100

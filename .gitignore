@@ -8,6 +8,9 @@ Cargo.lock.bak
 /tmp/
 *.log
 
+# v2 simulator: corpus spec is tracked, generated bundles are not
+/ground_truth_v2/out/
+
 # Historical / internal docs (kept around locally, not published)
 /docs/archive/
 

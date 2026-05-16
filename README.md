@@ -169,10 +169,18 @@ per-block coordinates, wobble/noise counts).
 
 The canonical YAML schema lives at
 [`docs/new/simulator_schema.json`](docs/new/simulator_schema.json) and
-is embedded into the binary (drift-tested in CI). The 22-fixture test
-corpus under `tests/synth_configs/` covers T01–T18 (T08 a six-point
-divergence sweep; T09 nested-HOR is deferred). Implementation contract
-+ acceptance gates: [`docs/new/simulator_impl_plan.md`](docs/new/simulator_impl_plan.md).
+is embedded into the binary (drift-tested in CI). Two corpora ship:
+
+- **`tests/synth_configs/`** — 22-fixture CI corpus covering T01–T18
+  (T08 a six-point divergence sweep; T09 nested-HOR is deferred).
+- **`ground_truth_v2/`** — 1,600-case benchmark corpus across 9
+  categories (simple_TR, hor_clean, hor_wobble, hor_shift,
+  hor_insertion, hor_event, mixed, random, gc_bias). Spec only;
+  generated FASTA bundles are gitignored. Re-run with
+  `./ground_truth_v2/run_batch.sh` (~2 s wall on 16 CPUs).
+
+Implementation contract + acceptance gates:
+[`docs/new/simulator_impl_plan.md`](docs/new/simulator_impl_plan.md).
 
 ## Test data
 
@@ -214,8 +222,9 @@ models/                Random-forest JSON (HOR-score + k-predictor)
 tools/training/        R scripts: ranger train, Platt fit, model export, CV
 tools/features/        Python reference feature extractors
 ground_truth/          Legacy synthetic-benchmark spec (regenerate from params.tsv)
+ground_truth_v2/       v2 benchmark corpus spec (1600 configs in 9 categories)
 test_data/smoke/       Tiny fixture for build verification
-tests/synth_configs/   v2 simulator test corpus (T01–T18, 22 active + 1 deferred)
+tests/synth_configs/   v2 CI fixtures (T01–T18, 22 active + 1 deferred)
 examples/              Cross-validation harness vs. the R prototype
 docs/
   rule.md              rule classifier algorithm

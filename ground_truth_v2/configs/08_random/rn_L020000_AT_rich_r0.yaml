@@ -1,0 +1,10 @@
+schema_version: 1
+seed: 2118241167
+templates:
+  dummy:
+    type: monomer
+    monomer_length_bp: 1
+structure:
+  - type: INSERTION
+    length_bp: 20000
+    kind: AT_rich

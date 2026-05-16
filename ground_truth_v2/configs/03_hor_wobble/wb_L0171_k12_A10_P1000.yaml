@@ -1,0 +1,19 @@
+schema_version: 1
+seed: 1275853414
+global:
+  mutation_rate: 0.02
+templates:
+  t:
+    type: HOR_slots
+    monomer_length_bp: 171
+    k: 12
+    inter_slot_divergence: 0.15
+structure:
+  - type: HOR
+    template: t
+    n_copies: 200
+modifiers:
+  - wobble:
+      amplitude_bp: 1.0
+      period_rows: 1000
+      model: sinusoidal
