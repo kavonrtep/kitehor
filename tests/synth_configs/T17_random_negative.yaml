@@ -1,0 +1,13 @@
+# Negative control: a single long INSERTION (random composition) with
+# no repeat block. Detector should report `ambiguous`. Note the
+# validator requires `structure: [...]` to have at least one block.
+schema_version: 1
+seed: 17
+templates:
+  dummy:
+    type: monomer
+    monomer_length_bp: 1
+structure:
+  - type: INSERTION
+    length_bp: 50000
+    kind: random

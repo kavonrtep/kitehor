@@ -1,0 +1,16 @@
+schema_version: 1
+seed: 3
+global:
+  mutation_rate: 0.02
+templates:
+  m:
+    type: monomer
+    monomer_length_bp: 170
+structure:
+  - type: SIMPLE_TR
+    template: m
+    n_copies: 1000
+modifiers:
+  - wobble:
+      amplitude_bp: 2.0
+      model: random_walk

@@ -1,0 +1,15 @@
+# Divergence sweep at k=4. Detector regime: A→B→C as d increases.
+schema_version: 1
+seed: 804
+global:
+  mutation_rate: 0.02
+templates:
+  t:
+    type: HOR_slots
+    monomer_length_bp: 170
+    k: 4
+    inter_slot_divergence: 0.55
+structure:
+  - type: HOR
+    template: t
+    n_copies: 200

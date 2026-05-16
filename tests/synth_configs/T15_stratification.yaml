@@ -1,0 +1,24 @@
+# Stratification: two SIMPLE_TR blocks with the same period but
+# different (related) consensus. Detector should detect a within-period
+# consensus change. Modelled as two SIMPLE_TR blocks with different
+# monomer templates of the same length, with the older stratum carrying
+# higher mutation noise (handled via per-stratum noise — currently
+# global only; both blocks share the same noise level in MVP).
+schema_version: 1
+seed: 15
+global:
+  mutation_rate: 0.03
+templates:
+  old:
+    type: monomer
+    monomer_length_bp: 170
+  young:
+    type: monomer
+    monomer_length_bp: 170
+structure:
+  - type: SIMPLE_TR
+    template: old
+    n_copies: 300
+  - type: SIMPLE_TR
+    template: young
+    n_copies: 1000

@@ -1,0 +1,21 @@
+# Per plan §A5: realised as ONE HOR block of n_copies=210 with an
+# INVERSION event on copies 101..110, not three concatenated HOR blocks.
+schema_version: 1
+seed: 12
+global:
+  mutation_rate: 0.02
+templates:
+  alpha:
+    type: HOR_slots
+    monomer_length_bp: 171
+    k: 12
+    inter_slot_divergence: 0.15
+structure:
+  - type: HOR
+    template: alpha
+    n_copies: 210
+post_generation:
+  - type: INVERSION
+    block: 0
+    start_copy: 101
+    length_copies: 10

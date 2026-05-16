@@ -28,5 +28,6 @@ pub mod monomer_model;
 pub mod rule;
 pub mod simulate;
 pub mod simulate_grid;
+pub mod synth;
 
 pub use errors::{HordetectError, Result};

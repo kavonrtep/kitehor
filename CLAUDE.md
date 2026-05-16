@@ -28,18 +28,27 @@ src/                  Rust crate (lib + bin)
   rule.rs             default HOR classifier (4-condition rule)
   classifier.rs       legacy ML loader (RF + Platt); used only under --use-ml-classifier
   classify.rs         legacy ML verdict orchestrator
+  simulate*.rs        legacy params.tsv-driven simulator (training corpus)
+  synth/              ← v2 YAML-driven simulator (`kitehor synth*`)
 config/classifier.toml legacy ML thresholds (only consulted with --use-ml-classifier)
 models/               Legacy RF JSON (baked into binary; loaded only by ML path)
 tools/training/       R training pipeline for the legacy model
 tools/features/       Python reference feature extractors (for ML cross-check)
 ground_truth/         params.tsv + simulator helpers; sequences are regenerated
 test_data/smoke/      87 KB synthetic fixture for build verification
+tests/synth_configs/  ← v2 simulator test corpus (T01–T18; 22 active + 1 deferred)
 examples/             validate_rf — legacy ML cross-check vs an R reference TSV
 conda/kitehor/        conda recipe (meta.yaml; built by .github/workflows/conda-release.yml)
 .github/workflows/    ci.yml, release.yml, conda-release.yml
 docs/                 project docs
   rule.md             ← the rule classifier, current default
   ci-status.md        ← CI/release plan + runbook
+  new/                ← v2 simulator + detector design docs
+    taxonomy.md         structural taxonomy of tandem-repeat arrays
+    detect_spec.md      line-width detector design (future work)
+    simulator_plan.md   upstream simulator implementation plan
+    simulator_impl_plan.md  kitehor-specific implementation contract
+    simulator_schema.json   canonical YAML config schema
   archive/            (gitignored) historical design docs
 ```
 
@@ -49,6 +58,35 @@ All non-README, non-CLAUDE documentation lives in `docs/`. Start with
 [`docs/ci-status.md`](docs/ci-status.md) for the CI/CD plan, locked
 decisions, and the release runbook. Add new topic docs as
 `docs/<topic>.md` siblings; do not scatter markdown at the repo root.
+v2 simulator + detector design docs live in
+[`docs/new/`](docs/new/) — read `simulator_impl_plan.md` §0 first for
+the decisions snapshot and amendments table.
+
+## v2 simulator (`synth*`)
+
+Richer YAML-driven simulator that coexists with the legacy
+`simulate`/`simulate-grid` pair. Lives entirely in `src/synth/`:
+
+| Module | Purpose |
+|---|---|
+| `config.rs`      | YAML loader + serde structural validation + MVP business rules |
+| `rng.rs`         | FNV-1a sub-stream derivation (matches parent project convention) |
+| `templates.rs`   | HOR_slots / monomer instantiation; cached by template name |
+| `coords.rs`      | `CoordMap` + `apply_indels` (kept-contiguous boundary rule) |
+| `blocks.rs`      | HOR/SIMPLE_TR/SHIFT/INSERTION expansion |
+| `wobble.rs`      | sinusoidal + AR(1) random_walk via residual-accumulator integer edits |
+| `events.rs`      | HYBRID/INVERSION/DUPLICATION/DELETION + events_json |
+| `noise.rs`       | final mutation + indel pass |
+| `grammar.rs`     | `structural_expression` emission (taxonomy §2 grammar) |
+| `truth.rs`       | `truth.tsv` writer + class inference |
+| `periods.rs`     | period candidate generator (true_base + true_hor_unit + distractors) |
+| `fasta.rs`       | FASTA writer |
+| `diagnostics.rs` | optional `{prefix}.diagnostics.json` |
+| `simulator.schema.json` | embedded canonical schema; drift-tested |
+
+CLI: `synth`, `synth-batch`, `synth-validate`, `synth-schema`. See
+[`docs/new/simulator_impl_plan.md`](docs/new/simulator_impl_plan.md)
+for the implementation contract and milestone acceptance gates.
 
 ## Workflow
 
@@ -65,6 +103,15 @@ decisions, and the release runbook. Add new topic docs as
 - **Full benchmark**: regenerate `ground_truth/sequences.fasta` from
   `ground_truth/params.tsv` (1,600 cases) before running the classifier
   on it — those files are not committed.
+
+- **v2 simulator smoke**:
+  ```
+  ./target/release/kitehor synth-batch \
+      --config-dir tests/synth_configs --out-dir /tmp/synth_out
+  ```
+  Produces 22 bundles (`.fa` + `.truth.tsv` + `.periods.tsv`); the
+  `T09_nested_hor.deferred.yaml` placeholder is skipped. Add
+  `--diagnostics` for per-array `.diagnostics.json`.
 
 ## Data policy
 

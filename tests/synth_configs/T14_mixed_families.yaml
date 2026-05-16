@@ -1,0 +1,18 @@
+schema_version: 1
+seed: 14
+global:
+  mutation_rate: 0.02
+templates:
+  ma:
+    type: monomer
+    monomer_length_bp: 170
+  mb:
+    type: monomer
+    monomer_length_bp: 220
+structure:
+  - type: SIMPLE_TR
+    template: ma
+    n_copies: 500
+  - type: SIMPLE_TR
+    template: mb
+    n_copies: 500

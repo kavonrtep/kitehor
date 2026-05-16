@@ -1,0 +1,14 @@
+# AT-rich composition (GC=0.2) simple TR.
+schema_version: 1
+seed: 18
+global:
+  mutation_rate: 0.02
+templates:
+  m:
+    type: monomer
+    monomer_length_bp: 170
+    gc_content: 0.2
+structure:
+  - type: SIMPLE_TR
+    template: m
+    n_copies: 1000

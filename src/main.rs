@@ -4,7 +4,10 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use kitehor::classifier::{ClassifierConfig, RandomForest, BAKED_HOR_MODEL, BAKED_K_MODEL};
 use kitehor::classify::{classify as run_classify, Verdict};
-use kitehor::cli::{Cli, Command, KitePeriodicityArgs, SimulateArgs, SimulateGridArgs};
+use kitehor::cli::{
+    Cli, Command, KitePeriodicityArgs, SimulateArgs, SimulateGridArgs, SynthArgs,
+    SynthBatchArgs, SynthValidateArgs,
+};
 use kitehor::features::{build_features, FeatureRow};
 use kitehor::hor_call::{classify as hor_classify, HorCallConfig};
 use kitehor::io::{load_fasta, LoadQc, LoadStatus};
@@ -21,7 +24,69 @@ fn main() -> Result<()> {
         Command::KitePeriodicity(args) => run_kite_periodicity(*args),
         Command::Simulate(args) => run_simulate(args),
         Command::SimulateGrid(args) => run_simulate_grid(args),
+        Command::SynthValidate(args) => run_synth_validate(args),
+        Command::SynthSchema => run_synth_schema(),
+        Command::Synth(args) => run_synth(args),
+        Command::SynthBatch(args) => run_synth_batch(args),
     }
+}
+
+fn run_synth(args: SynthArgs) -> Result<()> {
+    kitehor::synth::run_one(&args.config, &args.out, args.seed, args.diagnostics)?;
+    info!(
+        "synth: wrote {:?}.fa / .truth.tsv / .periods.tsv",
+        args.out
+    );
+    Ok(())
+}
+
+fn run_synth_batch(args: SynthBatchArgs) -> Result<()> {
+    if args.threads > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global()
+            .ok();
+    }
+    let n = kitehor::synth::run_batch(
+        &args.config_dir,
+        &args.out_dir,
+        args.seed_offset,
+        args.diagnostics,
+    )?;
+    info!(
+        "synth-batch: wrote {} bundle(s) to {:?}",
+        n, args.out_dir
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// synth-validate / synth-schema (M1)
+// ---------------------------------------------------------------------------
+
+fn run_synth_validate(args: SynthValidateArgs) -> Result<()> {
+    use kitehor::synth::load_and_validate;
+    match load_and_validate(&args.config) {
+        Ok(cfg) => {
+            info!(
+                "{:?}: OK — {} block(s), {} template(s), {} event(s)",
+                args.config,
+                cfg.structure.len(),
+                cfg.templates.len(),
+                cfg.post_generation.len()
+            );
+            println!("ok");
+            Ok(())
+        }
+        Err(e) => Err(anyhow::anyhow!("{}", e)),
+    }
+}
+
+fn run_synth_schema() -> Result<()> {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(kitehor::synth::CANONICAL_SCHEMA.as_bytes())?;
+    Ok(())
 }
 
 fn init_logger(verbosity: u8) {

@@ -1,0 +1,8 @@
+# T09 — nested HOR (taxonomy A3). Deferred to v2 per plan §0 Q3:
+# the current schema cannot express a 3×4 nesting cleanly without
+# adding an H_inner template type. The validator skips any file
+# whose extension is `.deferred.yaml`. Document-only placeholder.
+#
+# Intended structure when implemented:
+#   3-slot inner unit × 4 inner units = 12 outer slots; arrays of
+#   100 outer-unit copies; div_inner=0.10, div_outer=0.05.

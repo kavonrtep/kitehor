@@ -30,6 +30,18 @@ pub enum Command {
     /// Writes sequences.fasta, truth.tsv, monomers.tsv, events.tsv,
     /// and alternatives.tsv to the output directory.
     SimulateGrid(SimulateGridArgs),
+    /// Validate a v2 YAML simulator config against the canonical
+    /// schema (`docs/new/simulator_schema.json`) and MVP invariants.
+    /// Exits non-zero on first validation error.
+    SynthValidate(SynthValidateArgs),
+    /// Print the canonical JSON Schema to stdout.
+    SynthSchema,
+    /// Generate one synthetic tandem-repeat array from a YAML config.
+    /// Writes {PREFIX}.fa, {PREFIX}.truth.tsv, {PREFIX}.periods.tsv.
+    Synth(SynthArgs),
+    /// Run `synth` over every `*.yaml` in a directory (parallel).
+    /// `.deferred.yaml` placeholders are skipped.
+    SynthBatch(SynthBatchArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +278,54 @@ pub struct SimulateGridArgs {
     pub seed: u64,
 
     /// Number of rayon worker threads (0 = let rayon decide).
+    #[arg(long, default_value_t = 0)]
+    pub threads: usize,
+}
+
+// ---------------------------------------------------------------------------
+// synth-* (v2 simulator)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct SynthValidateArgs {
+    /// YAML config to validate.
+    pub config: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct SynthArgs {
+    /// YAML config file.
+    pub config: PathBuf,
+    /// Output prefix (REQUIRED). Writes PREFIX.fa, PREFIX.truth.tsv,
+    /// PREFIX.periods.tsv. There is no fallback to `global.output` in
+    /// the YAML (silently ignored — see plan §0 A3).
+    #[arg(short, long, required = true)]
+    pub out: PathBuf,
+    /// Override the YAML's `seed`.
+    #[arg(long)]
+    pub seed: Option<u64>,
+    /// Also emit PREFIX.diagnostics.json.
+    #[arg(long)]
+    pub diagnostics: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SynthBatchArgs {
+    /// Directory of `*.yaml` configs (`.deferred.yaml` skipped).
+    #[arg(long)]
+    pub config_dir: PathBuf,
+    /// Output directory. Each config writes `<stem>.fa /
+    /// .truth.tsv / .periods.tsv` here.
+    #[arg(long)]
+    pub out_dir: PathBuf,
+    /// Per-config seed = FNV-1a(seed_offset, filename). A fixed
+    /// `seed_offset` keeps the corpus byte-reproducible across runs.
+    #[arg(long, default_value_t = 0)]
+    pub seed_offset: u64,
+    /// Also emit `<stem>.diagnostics.json` per config.
+    #[arg(long)]
+    pub diagnostics: bool,
+    /// Number of rayon worker threads (0 = auto).
     #[arg(long, default_value_t = 0)]
     pub threads: usize,
 }
