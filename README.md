@@ -142,14 +142,17 @@ property bundle per record:
 |---|---|
 | `{prefix}.properties.tsv`     | Per-record class + base width, k, IC, phase_sep, wobble, n_phase_shifts, irregularity, confidence |
 | `{prefix}.width_features.tsv` | One row per tested width with R(k), IC, edge rates, class hint |
-| `{prefix}.segments.tsv`       | Per-segment rows when n_phase_shifts > 0 |
-| `{prefix}.diagnostics.json`   | Structured per-array reason + all of the above |
-| `{prefix}.consensus.fa`       | Monomer + HOR-unit consensuses (only for resolved classes) |
+| `{prefix}.segments.tsv`       | Per-segment rows when n_phase_shifts > 0 OR class=mixed (M7.2 adds consensus_identity_to_reference + consensus_identity_coverage) |
+| `{prefix}.diagnostics.json`   | Structured per-array reason + all of the above (`schema_version=2` post-M7.3) |
+| `{prefix}.consensus.fa`       | Whole-array monomer + HOR-unit consensuses for resolved classes; per-segment monomer records (`<array_id>_seg{N}_monomer`) for class=mixed (M7.3) |
 
 Classes: `HOR`, `irregular_HOR`, `simple_TR`, `mixed`, `ambiguous`.
-M6 calibration baseline: **94.4%** per-class accuracy on the
-1600-case `ground_truth_v2/` benchmark (≥ 92% target met). Design
-contract: [`docs/new/detect_impl_plan.md`](docs/new/detect_impl_plan.md).
+Calibration baseline (M7 ship state): **94.1 %** oracle / **90.6 %**
+kite-derived on the 1600-case `ground_truth_v2/` benchmark; mixed
+category recovered from 18 % (pre-M7 kite path) to 70 % via the
+M7.2 consensus-identity override. Design contract:
+[`docs/new/detect_impl_plan.md`](docs/new/detect_impl_plan.md) (M7
+plan: [`docs/new/detect_m7_plan.md`](docs/new/detect_m7_plan.md)).
 
 ### Combined pipeline (kite → detector)
 

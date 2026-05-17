@@ -74,16 +74,31 @@ pub fn consensus_on_slice(
 }
 
 /// One per-array consensus block — used for batched writes.
+///
+/// Two flavours coexist (M7.3): resolved-class arrays emit the
+/// whole-array monomer (+ optional hor_unit); `Mixed`-class arrays
+/// emit one record per analysis block instead.
 #[derive(Debug, Clone)]
-pub struct ConsensusRecord {
-    pub array_id: String,
-    pub monomer: Vec<u8>,
-    pub hor_unit: Option<Vec<u8>>,
-    pub hor_k: Option<usize>,
+pub enum ConsensusRecord {
+    Resolved {
+        array_id: String,
+        monomer: Vec<u8>,
+        hor_unit: Option<Vec<u8>>,
+        hor_k: Option<usize>,
+    },
+    /// Per-block monomer consensuses for a mixed array. Each entry
+    /// is `(segment_id, consensus_bytes)` and is emitted as
+    /// `>{array_id}_seg{segment_id}_monomer  length=…`.
+    MixedSegments {
+        array_id: String,
+        segments: Vec<(usize, Vec<u8>)>,
+    },
 }
 
-/// Write the consensus FASTA. Writes one or two records per array
-/// (`.monomer` always, `.hor_unit` when present).
+/// Write the consensus FASTA. Writes one or two records per
+/// resolved-class array (`.monomer` always, `.hor_unit` when
+/// present), or one record per analysis block for `Mixed`-class
+/// arrays (M7.3 — `<array_id>_seg{N}_monomer`).
 pub fn write_fasta(out_prefix: &Path, records: &[ConsensusRecord]) -> Result<()> {
     let path = consensus_path(out_prefix);
     if let Some(parent) = path.parent() {
@@ -93,18 +108,32 @@ pub fn write_fasta(out_prefix: &Path, records: &[ConsensusRecord]) -> Result<()>
     }
     let mut f = std::fs::File::create(&path).with_context(|| format!("creating {:?}", path))?;
     for r in records {
-        writeln!(f, ">{}.monomer  length={}", r.array_id, r.monomer.len())?;
-        write_wrapped(&mut f, &r.monomer)?;
-        if let Some(unit) = &r.hor_unit {
-            let k = r.hor_k.unwrap_or(0);
-            writeln!(
-                f,
-                ">{}.hor_unit  length={}  k={}",
-                r.array_id,
-                unit.len(),
-                k
-            )?;
-            write_wrapped(&mut f, unit)?;
+        match r {
+            ConsensusRecord::Resolved { array_id, monomer, hor_unit, hor_k } => {
+                writeln!(f, ">{}.monomer  length={}", array_id, monomer.len())?;
+                write_wrapped(&mut f, monomer)?;
+                if let Some(unit) = hor_unit {
+                    let k = hor_k.unwrap_or(0);
+                    writeln!(
+                        f,
+                        ">{}.hor_unit  length={}  k={}",
+                        array_id,
+                        unit.len(),
+                        k
+                    )?;
+                    write_wrapped(&mut f, unit)?;
+                }
+            }
+            ConsensusRecord::MixedSegments { array_id, segments } => {
+                for (seg_id, seg_consensus) in segments {
+                    writeln!(
+                        f,
+                        ">{}_seg{}_monomer  length={}",
+                        array_id, seg_id, seg_consensus.len()
+                    )?;
+                    write_wrapped(&mut f, seg_consensus)?;
+                }
+            }
         }
     }
     Ok(())
@@ -214,7 +243,7 @@ mod tests {
     fn write_fasta_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let prefix = dir.path().join("t");
-        let rec = ConsensusRecord {
+        let rec = ConsensusRecord::Resolved {
             array_id: "arr1".into(),
             monomer: b"ACGTACGTAC".to_vec(),
             hor_unit: Some(b"ACGTACGTACTGCATGCATGC".to_vec()),
@@ -233,13 +262,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let prefix = dir.path().join("t");
         let recs = vec![
-            ConsensusRecord {
+            ConsensusRecord::Resolved {
                 array_id: "a".into(),
                 monomer: b"AAAA".to_vec(),
                 hor_unit: None,
                 hor_k: None,
             },
-            ConsensusRecord {
+            ConsensusRecord::Resolved {
                 array_id: "b".into(),
                 monomer: b"CCCC".to_vec(),
                 hor_unit: Some(b"CCCCGGGG".to_vec()),
@@ -251,5 +280,29 @@ mod tests {
         assert!(s.contains(">a.monomer"));
         assert!(s.contains(">b.monomer"));
         assert!(s.contains(">b.hor_unit"));
+    }
+
+    // M7.3: mixed class emits per-segment monomer records, no .monomer
+    // or .hor_unit at the array level.
+    #[test]
+    fn write_fasta_mixed_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().join("t");
+        let rec = ConsensusRecord::MixedSegments {
+            array_id: "mx1".into(),
+            segments: vec![
+                (1, b"AAAA".to_vec()),
+                (2, b"TTTT".to_vec()),
+            ],
+        };
+        write_fasta(&prefix, std::slice::from_ref(&rec)).unwrap();
+        let text = std::fs::read_to_string(consensus_path(&prefix)).unwrap();
+        assert!(text.contains(">mx1_seg1_monomer  length=4"));
+        assert!(text.contains(">mx1_seg2_monomer  length=4"));
+        assert!(text.contains("AAAA"));
+        assert!(text.contains("TTTT"));
+        // No whole-array .monomer or .hor_unit for mixed.
+        assert!(!text.contains(">mx1.monomer"));
+        assert!(!text.contains(">mx1.hor_unit"));
     }
 }

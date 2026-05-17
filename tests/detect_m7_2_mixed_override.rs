@@ -163,3 +163,45 @@ fn segments_tsv_has_m7_2_columns() {
         "expected `consensus_identity_coverage` column; header was `{header}`"
     );
 }
+
+// ---- M7.3 ----
+
+#[test]
+fn diagnostics_json_schema_version_is_2() {
+    let (_dir, det) = synth_and_detect("T05_hor_clean");
+    let mut p = det.as_os_str().to_owned();
+    p.push(".diagnostics.json");
+    let s = std::fs::read_to_string(PathBuf::from(p)).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&s).unwrap();
+    assert_eq!(
+        doc.get("schema_version").and_then(|v| v.as_u64()),
+        Some(2),
+        "expected diagnostics schema_version 2 after M7.3"
+    );
+}
+
+#[test]
+fn mixed_array_emits_per_segment_monomers_to_consensus_fa() {
+    // T20 is the mixed positive control — class becomes Mixed via
+    // the M7.2 override. M7.3 says we should emit per-block monomer
+    // consensus records (`<array_id>_seg{N}_monomer`) instead of the
+    // whole-array .monomer (which doesn't exist for mixed).
+    let (_dir, det) = synth_and_detect("T20_same_width_mixed_hor");
+    let class = class_of(&det);
+    assert_eq!(class, "mixed", "T20 should be mixed for this assertion to apply");
+
+    let mut p = det.as_os_str().to_owned();
+    p.push(".consensus.fa");
+    let s = std::fs::read_to_string(PathBuf::from(p)).unwrap();
+    // Per-segment monomer records present.
+    assert!(
+        s.contains("_seg1_monomer"),
+        "expected per-segment monomer record in consensus.fa; got:\n{s}"
+    );
+    // Whole-array monomer / hor_unit must NOT be present for mixed.
+    let array_dot_monomer = format!(">{}.monomer", "T20_same_width_mixed_hor");
+    assert!(
+        !s.contains(&array_dot_monomer),
+        "mixed array must not emit whole-array .monomer record; got:\n{s}"
+    );
+}

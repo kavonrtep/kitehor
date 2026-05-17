@@ -18,9 +18,13 @@ Sequence-agnostic HOR detector. Two pipelines coexist:
    kitehor detect <fasta> --periods <periods.tsv> -o <prefix>
    ```
    Consumes a `periods.tsv` (v2 schema) and produces
-   `<prefix>.properties.tsv` / `.segments.tsv` / `.width_features.tsv` /
-   `.diagnostics.json` / `.consensus.fa`. Calibration baseline:
-   94.4% per-class accuracy on the 1600-case `ground_truth_v2/` benchmark.
+   `<prefix>.properties.tsv` / `.segments.tsv` (13 columns post-M7.2;
+   includes `consensus_identity_to_reference` + `_coverage`) /
+   `.width_features.tsv` / `.diagnostics.json` (`schema_version=2`
+   post-M7.3) / `.consensus.fa` (per-segment monomers for class=mixed,
+   whole-array monomer + optional hor_unit for resolved classes).
+   Calibration baseline: 94.4% per-class accuracy oracle, 90.6% kite
+   periods (1600-case `ground_truth_v2/`).
 
 3. **Combined pipeline** (kite candidates → detector):
    ```

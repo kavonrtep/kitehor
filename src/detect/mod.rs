@@ -81,8 +81,12 @@ pub fn run_one(
         segments.append(&mut new_segments);
         // M5: build consensus + viz when we have a chosen base width.
         // Review-2026-05-16 #1: only emit for resolved classes so
-        // Mixed/Ambiguous don't leak a heuristic-width consensus into
+        // Ambiguous doesn't leak a heuristic-width consensus into
         // the output bundle.
+        //
+        // M7.3: Mixed arrays emit one consensus record per analysis
+        // block instead of a whole-array record (the array doesn't
+        // have a single coherent monomer to summarise).
         let resolved = matches!(
             props.class,
             Class::SimpleTR | Class::HOR | Class::IrregularHOR
@@ -93,7 +97,7 @@ pub fn run_one(
                     let hor_unit = props
                         .hor_length_bp
                         .and_then(|hu| consensus::consensus(&arr.seq, hu));
-                    consensus_records.push(ConsensusRecord {
+                    consensus_records.push(ConsensusRecord::Resolved {
                         array_id: arr.id.clone(),
                         monomer,
                         hor_unit,
@@ -102,6 +106,21 @@ pub fn run_one(
                 }
                 if viz_flags.is_active() {
                     emit_viz(arr, base_w, cfg, viz_flags)?;
+                }
+            }
+        } else if matches!(props.class, Class::Mixed) {
+            if let Some(ctx) = mixed_ctx.as_ref() {
+                let mut segments: Vec<(usize, Vec<u8>)> = Vec::new();
+                for (i, c) in ctx.consensuses.iter().enumerate() {
+                    if let Some(seq) = c {
+                        segments.push((i + 1, seq.clone()));
+                    }
+                }
+                if !segments.is_empty() {
+                    consensus_records.push(ConsensusRecord::MixedSegments {
+                        array_id: arr.id.clone(),
+                        segments,
+                    });
                 }
             }
         }

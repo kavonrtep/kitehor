@@ -369,7 +369,13 @@ pub fn write_diagnostics(
         .collect();
 
     let doc = json!({
-        "schema_version": 1,
+        // M7.3: bumped 1 → 2. New per-segment columns
+        // (consensus_identity_to_reference, consensus_identity_coverage)
+        // in segments.tsv and per-segment monomer FASTA records for
+        // mixed-class arrays in consensus.fa. Diagnostics-JSON shape
+        // unchanged, but downstream readers should branch on this
+        // version if they depend on the old schema's segment fields.
+        "schema_version": 2,
         "n_arrays": properties.len(),
         "arrays": arrays,
     });
