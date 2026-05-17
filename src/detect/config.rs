@@ -172,7 +172,15 @@ impl Default for DetectorConfig {
 
             block_size_rows_min: 100,
             stratification_same_threshold: 0.90,
-            stratification_diff_threshold: 0.80,
+            // M7.2 calibration (2026-05-17): plan defaulted to 0.80
+            // ("considered different family") but empirically that
+            // also fires for single-family HORs with sub-monomer
+            // shifts (best-alignment identity 0.6–0.8). Tightened
+            // to 0.50, well above the 0.25-baseline random match
+            // rate and well below the 0.32-0.36 band where genuine
+            // mixed (different monomer composition) sits in the
+            // v2 corpus.
+            stratification_diff_threshold: 0.50,
             irregularity_demote_threshold: 0.50,
 
             // M7 defaults (`docs/new/detect_m7_plan.md` Q8).

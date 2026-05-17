@@ -440,7 +440,7 @@ fn properties_to_tsv(r: &Properties) -> String {
 
 fn segment_to_tsv(s: &Segment) -> String {
     format!(
-        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         s.array_id,
         s.segment_id,
         s.start_bp,
@@ -452,6 +452,8 @@ fn segment_to_tsv(s: &Segment) -> String {
         opt_f64(&s.phase_separation),
         opt_f64(&s.wobble_amplitude_bp),
         opt_f64(&s.irregularity_score),
+        opt_f64(&s.consensus_identity_to_reference),
+        opt_f64(&s.consensus_identity_coverage),
     )
 }
 
@@ -717,6 +719,8 @@ mod tests {
             phase_separation: None,
             wobble_amplitude_bp: None,
             irregularity_score: None,
+            consensus_identity_to_reference: None,
+            consensus_identity_coverage: None,
         }]
     }
 

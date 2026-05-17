@@ -3,7 +3,7 @@
 //! Walks every `*.yaml` under `tests/synth_configs/` (skipping
 //! `.deferred.yaml`), runs in parallel via the binary, and verifies:
 //!
-//! 1. All 22 active fixtures produce non-empty `.fa` + `.truth.tsv` +
+//! 1. All 23 active fixtures produce non-empty `.fa` + `.truth.tsv` +
 //!    `.periods.tsv` outputs.
 //! 2. The deferred placeholder is **not** generated.
 //! 3. Re-running the same `--seed-offset` against the same corpus
@@ -37,12 +37,12 @@ fn count_yaml(dir: &std::path::Path, deferred: bool) -> usize {
 }
 
 #[test]
-fn corpus_has_22_active_and_1_deferred() {
+fn corpus_has_23_active_and_1_deferred() {
     let active = count_yaml(&corpus_dir(), false);
     let deferred = count_yaml(&corpus_dir(), true);
     assert_eq!(
-        active, 22,
-        "expected 22 active fixtures, found {active}"
+        active, 23,
+        "expected 23 active fixtures, found {active}"
     );
     assert_eq!(
         deferred, 1,
@@ -67,7 +67,7 @@ fn batch_produces_all_active_bundles() {
         String::from_utf8_lossy(&out.stderr)
     );
     // Each active config should have produced three files.
-    let expected = 22;
+    let expected = 23;
     let fa_count = count_ext(dir.path(), "fa");
     let tr_count = count_ext_chain(dir.path(), "truth.tsv");
     let pe_count = count_ext_chain(dir.path(), "periods.tsv");
@@ -271,7 +271,7 @@ fn diagnostics_emitted_when_flag_set() {
         .unwrap();
     assert!(out.status.success());
     let n = count_ext_chain(dir.path(), "diagnostics.json");
-    assert_eq!(n, 22, "diagnostics file count mismatch");
+    assert_eq!(n, 23, "diagnostics file count mismatch");
 
     // Spot-check structure of one diagnostics file.
     let any = std::fs::read_dir(dir.path())

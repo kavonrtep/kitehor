@@ -227,7 +227,7 @@ The canonical YAML schema lives at
 [`docs/new/simulator_schema.json`](docs/new/simulator_schema.json) and
 is embedded into the binary (drift-tested in CI). Two corpora ship:
 
-- **`tests/synth_configs/`** — 22-fixture CI corpus covering T01–T18
+- **`tests/synth_configs/`** — 23-fixture CI corpus covering T01–T20
   (T08 a six-point divergence sweep; T09 nested-HOR is deferred).
 - **`ground_truth_v2/`** — 1,600-case benchmark corpus across 9
   categories (simple_TR, hor_clean, hor_wobble, hor_shift,
@@ -282,7 +282,7 @@ tools/features/        Python reference feature extractors
 ground_truth/          Legacy synthetic-benchmark spec (regenerate from params.tsv)
 ground_truth_v2/       v2 benchmark corpus spec (1600 configs in 9 categories)
 test_data/smoke/       Tiny fixture for build verification
-tests/synth_configs/   v2 CI fixtures (T01–T18, 22 active + 1 deferred)
+tests/synth_configs/   v2 CI fixtures (T01–T20, 23 active + 1 deferred)
 examples/              Cross-validation harness vs. the R prototype
 docs/
   rule.md              rule classifier algorithm

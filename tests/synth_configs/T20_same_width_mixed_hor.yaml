@@ -1,0 +1,27 @@
+# M7.2 positive control: two HOR blocks with the SAME (base_width, k)
+# but DIFFERENT monomer templates. The pre-M7 detector collapsed these
+# to a single HOR call because the multi_block_via_strong rule needs
+# distinct widths/k; M7.2 fires the consensus-identity override and
+# correctly reports `mixed`.
+schema_version: 1
+seed: 20
+global:
+  mutation_rate: 0.02
+templates:
+  family_a:
+    type: HOR_slots
+    monomer_length_bp: 200
+    k: 8
+    inter_slot_divergence: 0.15
+  family_b:
+    type: HOR_slots
+    monomer_length_bp: 200
+    k: 8
+    inter_slot_divergence: 0.15
+structure:
+  - type: HOR
+    template: family_a
+    n_copies: 50
+  - type: HOR
+    template: family_b
+    n_copies: 50

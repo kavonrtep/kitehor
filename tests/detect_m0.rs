@@ -96,7 +96,9 @@ structure:
     p.push(".segments.tsv");
     let segs = std::fs::read_to_string(std::path::PathBuf::from(p)).unwrap();
     assert_eq!(segs.lines().count(), 1);
-    assert_eq!(segs.lines().next().unwrap().split('\t').count(), 11);
+    // 13 columns post-M7.2 (was 11; added consensus_identity_to_reference,
+    // consensus_identity_coverage).
+    assert_eq!(segs.lines().next().unwrap().split('\t').count(), 13);
 
     // width_features.tsv: header + one row per tested width (M1).
     let mut p = out_prefix.as_os_str().to_owned();

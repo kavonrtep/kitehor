@@ -62,7 +62,7 @@ tools/features/       Python reference feature extractors (for ML cross-check)
 ground_truth/         legacy params.tsv + simulator helpers; sequences regenerated
 ground_truth_v2/      ← v2 corpus spec (1600 configs in 9 categories) + run_batch.sh
 test_data/smoke/      87 KB synthetic fixture for build verification
-tests/synth_configs/  ← v2 CI fixtures (T01–T18; 22 active + 1 deferred)
+tests/synth_configs/  ← v2 CI fixtures (T01–T20; 23 active + 1 deferred)
 examples/             validate_rf — legacy ML cross-check vs an R reference TSV
 conda/kitehor/        conda recipe (meta.yaml; built by .github/workflows/conda-release.yml)
 .github/workflows/    ci.yml, release.yml, conda-release.yml
@@ -130,12 +130,12 @@ for the implementation contract and milestone acceptance gates.
   `ground_truth/params.tsv` (1,600 cases) before running the classifier
   on it — those files are not committed.
 
-- **v2 simulator smoke** (22-fixture CI corpus):
+- **v2 simulator smoke** (23-fixture CI corpus):
   ```
   ./target/release/kitehor synth-batch \
       --config-dir tests/synth_configs --out-dir /tmp/synth_out
   ```
-  Produces 22 bundles (`.fa` + `.truth.tsv` + `.periods.tsv`); the
+  Produces 23 bundles (`.fa` + `.truth.tsv` + `.periods.tsv`); the
   `T09_nested_hor.deferred.yaml` placeholder is skipped. Add
   `--diagnostics` for per-array `.diagnostics.json`.
 

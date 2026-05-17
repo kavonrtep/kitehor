@@ -187,13 +187,24 @@ pub fn block_consensuses(
 ///   - `identity` = matches / (matches + mismatches) over non-N pairs
 ///   - `coverage` = (matches + mismatches) / consensus_length
 pub fn hamming_identity_n_skip(a: &[u8], b: &[u8]) -> Option<(f64, f64)> {
+    hamming_at_shift(a, b, 0)
+}
+
+/// Hamming identity with `b` cyclically shifted by `shift`
+/// positions before comparison. Same N-skip semantics as
+/// `hamming_identity_n_skip`.
+fn hamming_at_shift(a: &[u8], b: &[u8], shift: usize) -> Option<(f64, f64)> {
     if a.len() != b.len() || a.is_empty() {
         return None;
     }
+    let n = a.len();
+    let shift = shift % n;
     let mut matches = 0usize;
     let mut mismatches = 0usize;
-    for (x, y) in a.iter().zip(b.iter()) {
-        if *x == b'N' || *y == b'N' {
+    for i in 0..n {
+        let x = a[i];
+        let y = b[(i + shift) % n];
+        if x == b'N' || y == b'N' {
             continue;
         }
         if x == y {
@@ -207,18 +218,53 @@ pub fn hamming_identity_n_skip(a: &[u8], b: &[u8]) -> Option<(f64, f64)> {
         return None;
     }
     let identity = matches as f64 / informative as f64;
-    let coverage = informative as f64 / a.len() as f64;
+    let coverage = informative as f64 / n as f64;
     Some((identity, coverage))
 }
 
-/// All-pairs identity over the supplied consensuses, with
-/// coverage filtering. Pairs whose coverage is below
-/// `cfg.min_identity_coverage` are dropped — they aren't
-/// informative enough to drive the mixed override.
+/// Best-alignment Hamming identity: tries every circular shift
+/// of `b` against `a` and returns the maximum identity (with the
+/// coverage corresponding to that shift).
 ///
-/// `consensuses` is expected in the same order as
-/// `AnalysisBlock` instances; the `i` / `j` fields of returned
-/// pairs index into that slice.
+/// Motivation (M7.2 calibration, 2026-05-17): same-family blocks
+/// separated by a sub-monomer shift have a circularly-shifted
+/// consensus. Pure column Hamming sees that as completely
+/// different (identity ≈ 0.25). Sliding the comparison finds the
+/// alignment offset that maximises identity — single-family
+/// shifted blocks now score high; genuinely different families
+/// have low identity at every shift, so the max stays low.
+///
+/// Cost: O(L²). Acceptable at L = base_width_bp (≤ a few hundred
+/// for v2 corpora).
+pub fn best_alignment_identity(a: &[u8], b: &[u8]) -> Option<(f64, f64)> {
+    if a.len() != b.len() || a.is_empty() {
+        return None;
+    }
+    let mut best: Option<(f64, f64)> = None;
+    for shift in 0..a.len() {
+        if let Some(cur) = hamming_at_shift(a, b, shift) {
+            best = match best {
+                Some((id, _)) if id >= cur.0 => best,
+                _ => Some(cur),
+            };
+        }
+    }
+    best
+}
+
+/// All-pairs identity over the supplied consensuses, with
+/// coverage filtering. Each pair uses the best circular alignment
+/// (`best_alignment_identity`) so that same-family blocks
+/// separated by a sub-monomer shift score high — the mixed
+/// override only fires for genuinely divergent monomer content.
+///
+/// Pairs whose coverage is below `cfg.min_identity_coverage` are
+/// dropped — they aren't informative enough to drive the mixed
+/// override.
+///
+/// `consensuses` is expected in the same order as `AnalysisBlock`
+/// instances; the `i` / `j` fields of returned pairs index into
+/// that slice.
 pub fn pairwise_identity(
     consensuses: &[Option<Vec<u8>>],
     cfg: &DetectorConfig,
@@ -228,7 +274,7 @@ pub fn pairwise_identity(
         let Some(ci) = &consensuses[i] else { continue };
         for j in (i + 1)..consensuses.len() {
             let Some(cj) = &consensuses[j] else { continue };
-            let Some((identity, coverage)) = hamming_identity_n_skip(ci, cj) else {
+            let Some((identity, coverage)) = best_alignment_identity(ci, cj) else {
                 continue;
             };
             if coverage < cfg.min_identity_coverage {
@@ -421,9 +467,41 @@ mod tests {
         let cs = vec![Some(a), Some(b), Some(c)];
         let pairs = pairwise_identity(&cs, &cfg);
         assert_eq!(pairs.len(), 3);
-        // a vs b: 9/10 matches → identity 0.9.
+        // a vs b at shift 0: 9/10 matches → identity 0.9.
+        // best_alignment_identity may find a circular shift with
+        // equal or higher identity; the lower bound is 0.9.
         let ab = pairs.iter().find(|p| (p.i, p.j) == (0, 1)).unwrap();
-        assert!((ab.identity - 0.9).abs() < 1e-9);
+        assert!(ab.identity >= 0.9, "best-alignment identity should be ≥ 0.9; got {}", ab.identity);
+    }
+
+    // M7.2: best-alignment identity catches single-family shifted blocks.
+    #[test]
+    fn best_alignment_identity_is_higher_than_zero_shift_for_shifted_block() {
+        // `b` is a circular shift of `a` by 2 positions. Zero-shift
+        // Hamming would see mostly mismatches; best-alignment finds
+        // the matching shift and reports identity 1.0.
+        let a = b"ACGTACGTAC";
+        let b = b"GTACACGTAC";
+        // a vs b at shift 0: A-G C-T G-A T-C → all mismatches first
+        //   four; remaining mostly mismatch → low identity.
+        let (zero_id, _) = hamming_at_shift(a, b, 0).unwrap();
+        let (best_id, _) = best_alignment_identity(a, b).unwrap();
+        assert!(
+            best_id > zero_id,
+            "best-alignment {} should beat zero-shift {}",
+            best_id, zero_id
+        );
+        // The exact shift that aligns the two strings should hit 1.0.
+        assert!((best_id - 1.0).abs() < 1e-9, "best identity = {best_id}");
+    }
+
+    #[test]
+    fn best_alignment_identity_stays_low_for_different_strings() {
+        // Truly different monomers — no circular shift saves them.
+        let a = b"AAAAAAAAAA";
+        let b = b"TTTTTTTTTT";
+        let (best_id, _) = best_alignment_identity(a, b).unwrap();
+        assert!(best_id < 0.1, "expected ~0 for unrelated strings; got {best_id}");
     }
 
     #[test]

@@ -127,11 +127,12 @@ array_id\tlength_bp\tclass\tbase_width_bp\thor_k\thor_length_bp\
 \tphase_shift_positions\tphase_shift_offsets\tirregularity_score\
 \tinter_monomer_identity\tconfidence\tn_segments\treason";
 
-/// Frozen header for `segments.tsv` (11 columns).
+/// Header for `segments.tsv` (13 columns; M7.2 added the last two).
 pub const SEGMENTS_HEADER: &str = "\
 array_id\tsegment_id\tstart_bp\tend_bp\tclass\tbase_width_bp\thor_k\
 \tcolumn_conservation\tphase_separation\twobble_amplitude_bp\
-\tirregularity_score";
+\tirregularity_score\tconsensus_identity_to_reference\
+\tconsensus_identity_coverage";
 
 /// Frozen header for `width_features.tsv` (17 columns).
 pub const WIDTH_FEATURES_HEADER: &str = "\
@@ -143,6 +144,16 @@ array_id\twidth_bp\trows\tcolumn_IC\tfraction_conserved_columns\
 
 /// Per-segment row for `segments.tsv`. Populated when
 /// `n_segments > 1` (M4).
+///
+/// `class` is the **whole-array final class** applied to this
+/// sub-range — not an independent per-segment classification
+/// result (per M7 plan Q6 "light" option). Heavy per-segment
+/// classify is deferred to M8+.
+///
+/// The last two fields land in M7.2 and are filled only for
+/// segments emitted by the same-width mixed override (one row
+/// per analysis block). Phase-shift-derived segments leave them
+/// `None` for now.
 #[derive(Debug, Clone)]
 pub struct Segment {
     pub array_id: String,
@@ -156,6 +167,12 @@ pub struct Segment {
     pub phase_separation: Option<f64>,
     pub wobble_amplitude_bp: Option<f64>,
     pub irregularity_score: Option<f64>,
+    /// Hamming identity (N-skip) of this segment's consensus to
+    /// the medoid block's consensus. M7.2.
+    pub consensus_identity_to_reference: Option<f64>,
+    /// Fraction of consensus length that contributed to the
+    /// identity comparison (positions where neither was N). M7.2.
+    pub consensus_identity_coverage: Option<f64>,
 }
 
 /// Per-width diagnostic row for `width_features.tsv`. M0 emits one

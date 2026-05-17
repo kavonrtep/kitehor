@@ -73,10 +73,11 @@ pub fn run_one(
     let mut consensus_records: Vec<ConsensusRecord> = Vec::new();
 
     for (arr, pers) in &paired {
-        let (props, mut widths) = run_array_m4(arr, pers, cfg);
-        // DH2: emit one Segment row per inter-shift region when
-        // n_phase_shifts > 0.
-        let mut new_segments = segment::split(&props);
+        let (props, mut widths, mixed_ctx) = run_array_m4(arr, pers, cfg);
+        // DH2 + M7.2: emit segments. The mixed context (when present)
+        // wins over phase-shift segments because the array class
+        // already became Mixed inside run_array_m4.
+        let mut new_segments = segment::split(&props, mixed_ctx.as_ref());
         segments.append(&mut new_segments);
         // M5: build consensus + viz when we have a chosen base width.
         // Review-2026-05-16 #1: only emit for resolved classes so
@@ -164,46 +165,48 @@ fn emit_viz(
 
 // M0 placeholder removed; M4 path produces real classifications.
 
-/// M7.1: compute per-block consensus identity stats for HOR / irregular_HOR
-/// arrays and log them at debug level. Pure observation pass — the M7.2
-/// override that consumes the stats is wired in later.
+/// M7.2: compute the analysis-block consensus-identity context.
+/// Returns `Some` when ≥ 2 blocks were buildable and at least one
+/// pairwise comparison cleared the coverage gate (i.e., the
+/// context is usable for the mixed override + per-block segments).
 ///
 /// Comparison-width choice follows `docs/new/detect_m7_plan.md` Q2:
 ///   - prefer `hor_length_bp` consensus when each analysis block fits
 ///     at least `cfg.min_complete_units_per_block` complete HOR units;
-///   - otherwise fall back to `base_width_bp`.
-fn compute_analysis_block_diagnostics(
+///   - otherwise fall back to `base_width_bp` with unit-aligned blocks.
+fn compute_mixed_blocks_context(
     arr: &ArrayRecord,
     props: &Properties,
     cfg: &DetectorConfig,
-) {
-    let Some(base_w) = props.base_width_bp else { return };
+) -> Option<segment::MixedBlocksContext> {
+    let base_w = props.base_width_bp?;
 
-    // Pick the comparison width.
+    // Compare at base_width_bp. The plan (Q2) preferred
+    // `hor_length_bp` to catch families that share monomer
+    // composition but differ in slot arrangement. Empirically,
+    // the v2 corpus's mixed cases use DIFFERENT monomer templates,
+    // so base_width-level Hamming captures them. The hor_length_bp
+    // comparison was also catastrophically confused by undetected
+    // small phase shifts, which the detector's shift::compute
+    // misses for short offsets — at hor_length_bp width, a
+    // sub-monomer shift offsets the row alignment by a full
+    // column-shift and identity collapses to ~0.25 even for a
+    // single coherent HOR. base_width comparison is invariant to
+    // multiples-of-base-width drift, which is the only kind a
+    // single-family array can exhibit. Re-evaluate when corpora
+    // contain HOR families with shared monomers but distinct slot
+    // arrangements (currently out of M7 scope).
     let n_rows_base = arr.seq.len() / base_w.max(1);
-    let unit_rows_at_unit_width = props
-        .hor_length_bp
-        .map(|hu| arr.seq.len() / hu.max(1));
-    let (comparison_width, n_rows_cmp, unit_rows_in_cmp) =
-        match (props.hor_length_bp, unit_rows_at_unit_width) {
-            (Some(hu), Some(n_units)) => {
-                // How many HOR units would each analysis block hold
-                // if we evenly partitioned to max_segments_per_array?
-                let target_blocks = cfg.max_segments_per_array.max(1);
-                let units_per_block = n_units / target_blocks;
-                if units_per_block >= cfg.min_complete_units_per_block {
-                    // Use HOR-unit width.
-                    (hu, n_units, None)
-                } else {
-                    // Fall back to base width; emit unit-aligned blocks
-                    // when k is known so partial units at block edges
-                    // don't drive the comparison later.
-                    let unit_rows_base = props.hor_k.unwrap_or(1).max(1);
-                    (base_w, n_rows_base, Some(unit_rows_base))
-                }
-            }
-            _ => (base_w, n_rows_base, None),
-        };
+    // Emit unit-aligned blocks at base_width when k is known so
+    // boundaries land on slot edges.
+    let unit_rows_in_base = props.hor_k.unwrap_or(1).max(1);
+    let unit_rows_in_cmp = if unit_rows_in_base > 1 {
+        Some(unit_rows_in_base)
+    } else {
+        None
+    };
+    let comparison_width = base_w;
+    let n_rows_cmp = n_rows_base;
 
     // Phase-shift splits map from bp → rows in the comparison-width grid.
     let extra_splits: Vec<usize> = props
@@ -222,26 +225,111 @@ fn compute_analysis_block_diagnostics(
         cfg,
     );
     if blocks.len() < 2 {
-        return;
+        return None;
     }
-    let consensuses =
+    let mut consensuses =
         analysis_blocks::block_consensuses(&arr.seq, comparison_width, &blocks);
+    // M7.2 calibration (2026-05-17): drop blocks whose per-block
+    // column IC is below `ic_threshold_hor_unit`. These are
+    // "unstructured" blocks (e.g., the foreign sequence inside a
+    // hor_insertion case), and their consensus would otherwise look
+    // ~random to the identity test and force a false-mixed call.
+    let bg = wrap::Background::compute(&arr.seq);
+    // M7.2 calibration: filter at `ic_threshold_hor_base` (0.30 default,
+    // stricter than `ic_threshold_hor_unit`). Catches insertion blocks
+    // whose IC at the chosen comparison width sits in the 0.2–0.4 range
+    // without filtering out the mostly-clean blocks of cross-width
+    // mixed cases.
+    for (i, blk) in blocks.iter().enumerate() {
+        if consensuses[i].is_none() {
+            continue;
+        }
+        let ic = block_column_ic(
+            &arr.seq,
+            comparison_width,
+            blk.start_row,
+            blk.end_row,
+            &bg,
+        );
+        if ic < cfg.ic_threshold_hor_base {
+            consensuses[i] = None;
+        }
+    }
     let pairs = analysis_blocks::pairwise_identity(&consensuses, cfg);
-    let medoid = analysis_blocks::pick_medoid(consensuses.len(), &pairs);
-    let min_id = pairs
-        .iter()
-        .map(|p| p.identity)
-        .fold(f64::INFINITY, f64::min);
-    log::debug!(
-        target: "kitehor::detect::analysis_blocks",
-        "{}: blocks={} cmp_w={} pairs={} min_id={:.3} medoid={:?}",
-        arr.id,
-        blocks.len(),
+    let medoid = analysis_blocks::pick_medoid(consensuses.len(), &pairs)?;
+    Some(segment::MixedBlocksContext {
+        blocks,
+        consensuses,
+        pairs,
+        reference_block: medoid,
         comparison_width,
-        pairs.len(),
-        min_id,
-        medoid,
-    );
+    })
+}
+
+/// M7.2: per-block mean column IC at the comparison width. Returns
+/// 0.0 when the slice is too narrow to compute. Uses the array-wide
+/// background frequencies passed in.
+fn block_column_ic(
+    seq: &[u8],
+    width: usize,
+    start_row: usize,
+    end_row: usize,
+    bg: &wrap::Background,
+) -> f64 {
+    let n_rows_total = seq.len() / width.max(1);
+    let end = end_row.min(n_rows_total);
+    if start_row >= end || width == 0 {
+        return 0.0;
+    }
+    let n_rows = end - start_row;
+    let mut total_ic = 0.0;
+    let mut counted_cols = 0;
+    for c in 0..width {
+        let mut counts = [0usize; 4];
+        let mut n_acgt = 0usize;
+        for r in start_row..end {
+            match seq[r * width + c] {
+                b'A' => { counts[0] += 1; n_acgt += 1; }
+                b'C' => { counts[1] += 1; n_acgt += 1; }
+                b'G' => { counts[2] += 1; n_acgt += 1; }
+                b'T' => { counts[3] += 1; n_acgt += 1; }
+                _ => {}
+            }
+        }
+        if n_acgt == 0 {
+            continue;
+        }
+        let mut col_ic = 0.0;
+        for i in 0..4 {
+            let p = counts[i] as f64 / n_acgt as f64;
+            if p > 0.0 {
+                col_ic += p * (p / bg.q[i]).log2();
+            }
+        }
+        total_ic += col_ic;
+        counted_cols += 1;
+        // `n_rows` unused but kept for parity with the whole-array
+        // computation; per-row scaling already in p.
+        let _ = n_rows;
+    }
+    if counted_cols == 0 {
+        0.0
+    } else {
+        total_ic / counted_cols as f64
+    }
+}
+
+/// M7.2: returns the worst-pair identity (lowest, most divergent),
+/// or `None` if no valid pair survived the coverage gate.
+fn worst_pair_identity(ctx: &segment::MixedBlocksContext) -> Option<(f64, usize, usize)> {
+    ctx.pairs
+        .iter()
+        .min_by(|a, b| {
+            a.identity
+                .partial_cmp(&b.identity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|p| (p.identity, p.i, p.j))
 }
 
 
@@ -249,11 +337,18 @@ fn compute_analysis_block_diagnostics(
 /// running the classify module over `width_features`. Then layers M3.5
 /// Pass-B phase-shift offset recovery on top, using the chosen
 /// `base_width_bp` as the primary width for shift analysis.
+///
+/// M7.2: also computes the analysis-block consensus-identity context.
+/// When the override fires (HOR/IrregularHOR + min-pair identity
+/// ≤ `stratification_diff_threshold`), the class is rewritten to
+/// `Mixed`, class-defining fields are cleared (per review #1), and
+/// the context is returned so per-block segment rows can be emitted
+/// by the caller.
 fn run_array_m4(
     arr: &ArrayRecord,
     pers: &[PeriodCandidate],
     cfg: &DetectorConfig,
-) -> (Properties, Vec<WidthFeatures>) {
+) -> (Properties, Vec<WidthFeatures>, Option<segment::MixedBlocksContext>) {
     let (mut props_m35, widths) = run_array_m3_5(arr, pers, cfg);
     // DH4: capture the pre-decision width BEFORE the classify-result
     // copy overwrites props_m35.base_width_bp.
@@ -292,13 +387,65 @@ fn run_array_m4(
     }
     props_m35.reason = decision.reason;
 
-    // M7.1: compute the analysis-block consensus-identity stats
-    // for HOR / irregular_HOR arrays. This pass is observational
-    // — the actual mixed override that consumes the stats lands
-    // in M7.2. Result is logged at debug level so it's visible
-    // when calibrating without affecting any class call.
+    // M7.2: same-width mixed override. Compute analysis-block
+    // consensus identities for HOR / irregular_HOR arrays; if any
+    // valid pair is at or below `stratification_diff_threshold`,
+    // rewrite class to Mixed and clear class-defining fields.
+    //
+    // simple_TR is intentionally NOT eligible (M7 plan Q5).
+    //
+    // Single-family-perturbation gates (M7 plan risks §): pure
+    // column-Hamming is confused by phase shifts (alignment offset),
+    // wobble (drifting alignment), and mean-shift drift (gradual
+    // misalignment over the array). All three would fire the mixed
+    // override for what is structurally one family with alignment
+    // perturbations. Skip the override when any of these signals is
+    // strong. Inversion is documented as accepted false-mixed in
+    // M7 plan §Risks (strand-aware deferred to v2).
+    let mut mixed_ctx: Option<segment::MixedBlocksContext> = None;
+    // M7.2 calibration: rely on the tightened `stratification_diff_threshold`
+    // (0.50) plus best-alignment Hamming identity to discriminate
+    // genuine mixed (random match rate ≈ 0.25-0.36) from single-family
+    // shift/wobble cases (best-alignment identity 0.6+). Earlier
+    // single_family_perturbed gates over-fired on mixed cases where
+    // M3.5 detected spurious phase shifts in the confused wrap.
     if matches!(props_m35.class, Class::HOR | Class::IrregularHOR) {
-        compute_analysis_block_diagnostics(arr, &props_m35, cfg);
+        if let Some(ctx) = compute_mixed_blocks_context(arr, &props_m35, cfg) {
+            if let Some((min_id, i, j)) = worst_pair_identity(&ctx) {
+                log::debug!(
+                    target: "kitehor::detect::analysis_blocks",
+                    "{}: blocks={} cmp_w={} pairs={} min_id={:.3} medoid={}",
+                    arr.id,
+                    ctx.blocks.len(),
+                    ctx.comparison_width,
+                    ctx.pairs.len(),
+                    min_id,
+                    ctx.reference_block,
+                );
+                if min_id <= cfg.stratification_diff_threshold {
+                    let n_blocks = ctx.blocks.len();
+                    let original_class = props_m35.class.as_str();
+                    props_m35.class = Class::Mixed;
+                    props_m35.base_width_bp = None;
+                    props_m35.hor_k = None;
+                    props_m35.hor_length_bp = None;
+                    props_m35.column_conservation = None;
+                    props_m35.phase_separation = None;
+                    props_m35.inter_monomer_identity = None;
+                    props_m35.n_segments = n_blocks;
+                    props_m35.reason = format!(
+                        "mixed — block-consensus identity {:.3} ≤ diff_threshold {:.3} \
+                         (block {} vs {} of {} at width {}; was {})",
+                        min_id,
+                        cfg.stratification_diff_threshold,
+                        i, j, n_blocks,
+                        ctx.comparison_width,
+                        original_class,
+                    );
+                    mixed_ctx = Some(ctx);
+                }
+            }
+        }
     }
 
     // DH3: copy irregularity_score from the chosen base_width's
@@ -390,7 +537,14 @@ fn run_array_m4(
         }
     }
 
-    (props_m35, widths)
+    // M7.2: the phase-shift recovery above runs from `decision.base_width_bp`
+    // (the original HOR decision), so it would overwrite `n_segments` even
+    // for Mixed arrays. Reassert the per-block segment count.
+    if let Some(ctx) = &mixed_ctx {
+        props_m35.n_segments = ctx.blocks.len();
+    }
+
+    (props_m35, widths, mixed_ctx)
 }
 
 /// M3.5 per-array work: M3 + Pass-B phase-shift offset recovery.
