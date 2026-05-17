@@ -126,6 +126,36 @@ to where in this plan the change applied.
   - single-run `detect` now mirrors batch-mode DH11: periods rows
     whose `array_id` matches no FASTA record are a hard error
     unless `--allow-extra-periods` is set (review #11, low).
+- **A19 — M7 landed: per-block analysis + same-width mixed override**
+  (`docs/new/detect_m7_plan.md`, plan reviewed 2026-05-16, code landed
+  2026-05-17 as M7.1–M7.3). Resolves A16's two deferrals:
+  - **Internal `AnalysisBlock`** in `src/detect/analysis_blocks.rs`
+    (M7.1). Adaptive block sizing
+    (`max(min_segment_rows, ceil(n_rows / max_segments_per_array))`),
+    k-aligned block boundaries, low-IC blocks filtered from the
+    pairwise consensus-identity test.
+  - **Mixed override** for `HOR` / `IrregularHOR` (M7.2). Best-alignment
+    Hamming identity at `base_width_bp` (the plan's Q2 `hor_length_bp`
+    was empirically too sensitive to undetected sub-monomer shifts);
+    `stratification_diff_threshold` re-calibrated 0.80 → 0.50
+    based on observed identity bands (genuine mixed 0.30–0.36;
+    shifted-single-family 0.6+). `simple_TR` intentionally NOT
+    eligible — T15 stratification stays `simple_TR`.
+  - **`Segment` schema bump** (M7.2): two new columns
+    (`consensus_identity_to_reference`, `consensus_identity_coverage`),
+    `SEGMENTS_HEADER` now 13 cols.
+  - **`consensus.fa` schema** (M7.3): `ConsensusRecord` is now an enum
+    with `Resolved` and `MixedSegments` variants; mixed arrays emit
+    one `<array_id>_seg{N}_monomer` record per analysis block.
+  - **`diagnostics.json` `schema_version` 1 → 2** (M7.3).
+  - **M7 acceptance** (see `docs/reports/`): mixed kite-derived
+    18 % → 70 % (the load-bearing motivation), oracle 96 % → 100 %.
+    Costs: `hor_event_inversion` regresses to 42 % (documented
+    strand-aware deferral, OQ3); `hor_insertion` to 86 % (foreign-
+    sequence blocks sometimes pass the IC gate; M8 candidate via
+    explicit insertion-detection signal). All other categories
+    within 1 pp of M6 baseline. Locked tests in
+    `tests/detect_m7_2_mixed_override.rs`.
 - **A18 — kite emit-periods review fixes**
   (`docs/reviews/kite_emit_periods_integration_review_2026-05-16.md`).
   Tightens A17:
@@ -910,6 +940,7 @@ new **M0** for IO/config scaffolding (A10) and tightens M4 and M5.
 | **M4** | Array classification + segmentation | **exact pass on T01, T05, T06, T07, T10, T13, T17, T18** (A8) | categories 01–07, 09 | every listed core fixture produces the `expected_class`/`expected_base_width_bp`/`expected_hor_k` from `detect_expectations.tsv`; reason field substring-matches when required (regime C → `"regime C"`); divergence sweep T08 a→f hits the expected regime transitions |
 | M5 | Consensus + diagnostics (A9) | T05 (HOR clean), plus a deterministic inline-sequence fixture (new — added under `tests/synth_configs/T19_inline_consensus.yaml`) | category 02 | `consensus.fa` round-trips: **(a)** monomer consensus at `base_width` matches the simulator's diagnostics slot consensuses within 5 % per-base disagreement; **(b)** HOR-unit consensus is built from the HOR-unit-width column votes, **not** by repeating the base-width consensus |
 | M6 | Property-level eval harness | — | full 1600-case | `tools/detect_eval/` reports a single summary tsv; weights in `confidence.rs` calibrated; **CI core fixtures must pass exactly**; v2 benchmark class accuracy ≥ 92 % overall and ≥ 88 % within each of the 9 categories |
+| **M7** | Per-block consensus identity + same-width mixed override (A19) | T20 (positive) + T15/T05/T10/T03 (negative); see `tests/detect_m7_2_mixed_override.rs` | full 1600-case | `Segment` gains identity columns; consensus.fa gains per-segment monomers for mixed; mixed accuracy on `ground_truth_v2/` kite-derived ≥ 70 %; oracle ≥ 94 %; M4 fixtures still exact-pass. **Landed 2026-05-17 (`a72e8e8`); see `docs/reports/`.** |
 
 Each milestone closes a PR. CI gate per milestone: `cargo test
 --release detect::` plus an integration test that runs M*N* against
