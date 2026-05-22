@@ -1,164 +1,220 @@
-name: release
+name: Release
 
-# Fires on annotated/lightweight tag pushes matching a version pattern.
-# `workflow_dispatch` lets us re-run a build against an existing tag
-# without re-tagging (e.g. after fixing a downstream issue).
+# Tag-driven release pipeline.
+#
+#   git tag v0.X.Y && git push origin v0.X.Y
+#
+# Stages:
+#   1. check-tag — strict version match between the tag (v0.X.Y) and
+#      [package].version in Cargo.toml. Fails fast.
+#   2. build (Linux x86_64) — release binary, packaged as tar.gz with
+#      a sha256 sidecar.
+#   3. publish — gh release create with auto-generated notes; uploads
+#      the archive + .sha256.
+#   4. conda — builds the linux-64 conda package from conda/kitehor/
+#      and uploads it to the petrnovak Anaconda channel.
+
 on:
   push:
-    tags: ['[0-9]+.[0-9]+.[0-9]+*']
+    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g. 0.1.0). Must already exist.'
+        description: "Tag to (re-)build (e.g. v0.9.0). Must already exist."
         required: true
 
 permissions:
-  contents: write   # to create the GitHub Release
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY: kitehor
+  # Opt third-party JS actions (rust-toolchain, rust-cache,
+  # setup-miniconda) into the Node 24 runtime ahead of GitHub's
+  # June 2026 forced cutover.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  CARGO_TERM_COLOR: always
-  BINARY: kitehor
-
 jobs:
-  # ─────────────────────────────────────────────────────────────────────
+  # ────────────────────────────────────────────────────────────────────
   # 1. Fast fail: tag must equal Cargo.toml package version.
-  # ─────────────────────────────────────────────────────────────────────
-  version-check:
+  # ────────────────────────────────────────────────────────────────────
+  check-tag:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     outputs:
-      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.parse.outputs.version }}
+      tag: ${{ steps.parse.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Resolve tag
-        id: tag
+      - uses: actions/checkout@v5
+      - id: parse
+        shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ github.event.inputs.tag }}"
           else
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            tag="${GITHUB_REF_NAME}"
           fi
-      - name: Assert tag matches Cargo.toml
-        run: |
+          ver="${tag#v}"
           # First `version = "..."` in Cargo.toml is the [package] one.
-          # `\nversion` anchors to start-of-line so `rust-version` does
-          # not match.
-          V=$(grep -m1 -E '^version[[:space:]]*=' Cargo.toml \
-              | sed -E 's/.*"([^"]+)".*/\1/')
-          T="${{ steps.tag.outputs.tag }}"
-          if [ "$V" != "$T" ]; then
-            echo "::error::Cargo.toml version ($V) != tag ($T)"
+          # `^version` anchors so `rust-version = "..."` doesn't match.
+          cargo_ver=$(grep -m1 -E '^version[[:space:]]*=' Cargo.toml \
+                       | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "tag=$tag  ver=$ver  cargo_ver=$cargo_ver"
+          if [ "$ver" != "$cargo_ver" ]; then
+            echo "::error::tag $tag (version $ver) doesn't match Cargo.toml version $cargo_ver"
             exit 1
           fi
-          echo "tag matches Cargo.toml: $V"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag"     >> "$GITHUB_OUTPUT"
 
-  # ─────────────────────────────────────────────────────────────────────
-  # 2. Build a release binary per target. Matrix runs on the same
-  # ubuntu-latest runner; gnu uses the host toolchain, musl pulls in
-  # musl-tools for static linking.
-  # ─────────────────────────────────────────────────────────────────────
+  # ────────────────────────────────────────────────────────────────────
+  # 2. Build a release binary. Single-target (linux x86_64 gnu) — the
+  # full pipeline is CLI-only and conda only ships linux-64.
+  # ────────────────────────────────────────────────────────────────────
   build:
-    needs: version-check
-    runs-on: ubuntu-latest
+    needs: check-tag
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - x86_64-unknown-linux-musl
+        include:
+          - target: x86_64-unknown-linux-gnu
+            archive: tar.gz
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install pinned toolchain + cross target
-        run: |
-          rustup show
-          rustup target add ${{ matrix.target }}
-          rustc --version
-          cargo --version
-
-      - name: Install musl-tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get install -y musl-tools
-
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.check-tag.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1
-          shared-key: ${{ runner.os }}-rust-${{ matrix.target }}
-
-      - name: cargo build --release --target ${{ matrix.target }}
+      - name: Build release binary
         run: cargo build --release --locked --target ${{ matrix.target }}
-
-      - name: Strip + tarball
+      - name: Strip + stage archive
+        shell: bash
         run: |
-          TAG="${{ needs.version-check.outputs.tag }}"
-          TARGET="${{ matrix.target }}"
-          BIN_DIR="target/${TARGET}/release"
-          # Strip if possible. Static musl binaries may already be
-          # stripped or refuse `strip` outright; ignore failures.
-          strip "${BIN_DIR}/${BINARY}" || true
-
-          mkdir -p dist
-          OUT="dist/${BINARY}-${TAG}-${TARGET}.tar.gz"
-          # Tarball layout:
-          #   kitehor          (the binary)
-          #   LICENSE-MIT
-          #   LICENSE-APACHE
-          #   README.md
-          tar -czvf "$OUT" \
-              -C "${BIN_DIR}" "${BINARY}" \
-              -C "$GITHUB_WORKSPACE" \
-                  LICENSE-MIT LICENSE-APACHE README.md
-          ls -lh "$OUT"
-          sha256sum "$OUT" > "${OUT}.sha256"
-
-      - uses: actions/upload-artifact@v4
+          set -euo pipefail
+          ver="${{ needs.check-tag.outputs.version }}"
+          name="${BINARY}-v${ver}-${{ matrix.target }}"
+          bin_dir="target/${{ matrix.target }}/release"
+          strip "${bin_dir}/${BINARY}" || true
+          mkdir -p "dist/${name}"
+          cp "${bin_dir}/${BINARY}" "dist/${name}/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "dist/${name}/"
+          echo "ARCHIVE_BASE=${name}" >> "$GITHUB_ENV"
+      - name: Pack tar.gz
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          tar -czf "${ARCHIVE_BASE}.tar.gz" "${ARCHIVE_BASE}"
+          sha256sum "${ARCHIVE_BASE}.tar.gz" > "${ARCHIVE_BASE}.tar.gz.sha256"
+          ls -lh
+      - uses: actions/upload-artifact@v5
         with:
-          name: dist-${{ matrix.target }}
+          name: archive-${{ matrix.target }}
           path: |
             dist/*.tar.gz
             dist/*.sha256
-          retention-days: 7
+          if-no-files-found: error
 
-  # ─────────────────────────────────────────────────────────────────────
-  # 3. Publish the GitHub Release with both tarballs + a combined
-  # SHA256SUMS file. Auto-generated release notes from the merge log.
-  # ─────────────────────────────────────────────────────────────────────
+  # ────────────────────────────────────────────────────────────────────
+  # 3. Publish the GitHub Release with the tarball + a combined
+  # SHA256SUMS file. Auto-generated notes from the merge log.
+  # ────────────────────────────────────────────────────────────────────
   publish:
-    needs: [version-check, build]
+    needs: [check-tag, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
         with:
-          path: artifacts
-
-      - name: Flatten + combine SHA256SUMS
+          path: dist
+          pattern: archive-*
+          merge-multiple: true
+      - name: Verify checksums + combine SHA256SUMS
+        shell: bash
         run: |
-          mkdir -p dist
-          find artifacts -name '*.tar.gz' -exec cp {} dist/ \;
-          : > dist/SHA256SUMS
-          for f in artifacts/*/*.sha256; do
-            # rewrite path to just the basename, drop intermediate dirs
-            sed -E 's|^([0-9a-f]+)  .*/([^/]+)|\1  \2|' "$f" >> dist/SHA256SUMS
+          set -euo pipefail
+          cd dist
+          for sum in *.sha256; do sha256sum -c "$sum"; done
+          : > SHA256SUMS
+          for f in *.sha256; do
+            cat "$f" >> SHA256SUMS
           done
-          ls -la dist/
-
-      - name: Create GitHub Release
+          ls -la
+      - name: Create GitHub release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          TAG="${{ needs.version-check.outputs.tag }}"
-          gh release create "$TAG" \
-              --title "$TAG" \
-              --generate-notes \
-              --verify-tag \
-              dist/*.tar.gz dist/SHA256SUMS
+          set -euo pipefail
+          tag="${{ needs.check-tag.outputs.tag }}"
+          gh release create "$tag" \
+            --title "$tag" \
+            --generate-notes \
+            --verify-tag \
+            ./dist/*.tar.gz ./dist/SHA256SUMS
+
+  # ────────────────────────────────────────────────────────────────────
+  # 4. Conda — build linux-64 package and upload to the petrnovak
+  # Anaconda channel.
+  # ────────────────────────────────────────────────────────────────────
+  conda:
+    needs: [check-tag, publish]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.check-tag.outputs.tag }}
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          channel-priority: strict
+      - name: Install conda-build + anaconda-client
+        # setuptools>=81 removed pkg_resources, which anaconda-client's
+        # binstar_client still imports — pin <81 per the upstream
+        # workaround.
+        run: conda install -n base -y conda-build anaconda-client "setuptools<81"
+      - name: Build conda package
+        env:
+          KITEHOR_VERSION: ${{ needs.check-tag.outputs.version }}
+        run: |
+          conda build conda/kitehor/ --output-folder conda-out -c conda-forge
+      - name: Upload to petrnovak channel
+        env:
+          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          pkgs=( conda-out/linux-64/kitehor-*.conda
+                 conda-out/linux-64/kitehor-*.tar.bz2 )
+          if [ "${#pkgs[@]}" -eq 0 ]; then
+            echo "::error::no conda packages found under conda-out/linux-64/"
+            exit 1
+          fi
+          if [ -x "$CONDA/bin/anaconda" ]; then
+            anaconda_bin="$CONDA/bin/anaconda"
+          else
+            anaconda_bin="anaconda"
+          fi
+          "$anaconda_bin" --token "$ANACONDA_API_TOKEN" upload \
+            --user petrnovak --label main --force "${pkgs[@]}"
+      - name: Upload build artefact (for debugging)
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: kitehor-conda-${{ needs.check-tag.outputs.tag }}
+          path: conda-out/linux-64/kitehor-*
+          if-no-files-found: ignore

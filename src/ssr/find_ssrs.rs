@@ -58,7 +58,10 @@ pub fn find_ssrs(sequence: &[u8], specs: &[MotifSpec]) -> Vec<Hit> {
         while i + l * min_reps <= len {
             let motif = &seq_lower[i..i + l];
             // motif characters must all be valid ACGT (no 'n').
-            if motif.iter().any(|b| !matches!(*b, b'a' | b'c' | b'g' | b't')) {
+            if motif
+                .iter()
+                .any(|b| !matches!(*b, b'a' | b'c' | b'g' | b't'))
+            {
                 i += 1;
                 continue;
             }
@@ -71,9 +74,7 @@ pub fn find_ssrs(sequence: &[u8], specs: &[MotifSpec]) -> Vec<Hit> {
             if n_reps >= min_reps {
                 let start = i + 1; // 1-based inclusive
                 let end = j; // 0-based exclusive
-                let motif_lower = std::str::from_utf8(motif)
-                    .expect("ascii motif")
-                    .to_string();
+                let motif_lower = std::str::from_utf8(motif).expect("ascii motif").to_string();
                 let is_homo = is_homopolymer(&motif_lower);
                 if is_homo {
                     if l == 1 {

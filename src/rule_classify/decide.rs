@@ -165,7 +165,14 @@ pub fn decide_with_clusters(
             })
             .unwrap();
         let founder = clusters[founder_idx].clone();
-        let v = hor_verdict(case_id, &founder, k, &top, "top_is_multiple_of_founder", &clusters);
+        let v = hor_verdict(
+            case_id,
+            &founder,
+            k,
+            &top,
+            "top_is_multiple_of_founder",
+            &clusters,
+        );
         return (v, clusters);
     }
 
@@ -232,7 +239,13 @@ pub fn decide_with_clusters(
     if has_any {
         let conf = (top.total_score / total_s).clamp(0.0, 1.0);
         return (
-            simple_tr_verdict(case_id, &top, conf, clusters.len() as u32, "monotonic_multiples"),
+            simple_tr_verdict(
+                case_id,
+                &top,
+                conf,
+                clusters.len() as u32,
+                "monotonic_multiples",
+            ),
             clusters,
         );
     }
@@ -244,7 +257,13 @@ pub fn decide_with_clusters(
     if n_significant == 1 {
         let conf = (top.total_score / total_s).clamp(0.0, 1.0);
         return (
-            simple_tr_verdict(case_id, &top, conf, clusters.len() as u32, "lone_significant_cluster"),
+            simple_tr_verdict(
+                case_id,
+                &top,
+                conf,
+                clusters.len() as u32,
+                "lone_significant_cluster",
+            ),
             clusters,
         );
     }
@@ -357,12 +376,7 @@ pub fn cluster_score_near(clusters: &[Cluster], target: f64, tol: f64) -> f64 {
 /// `score(2k·p) ≥ score((k+1)·p)`. A simple TR (monotonic decay) shows
 /// the opposite. Zero scores treated as 0 (not skipped); both missing
 /// passes trivially.
-pub fn harmonic_confirms_hor(
-    clusters: &[Cluster],
-    founder_period: f64,
-    k: u32,
-    tol: f64,
-) -> bool {
+pub fn harmonic_confirms_hor(clusters: &[Cluster], founder_period: f64, k: u32, tol: f64) -> bool {
     let kf = k as f64;
     let s_double_tile = cluster_score_near(clusters, 2.0 * kf * founder_period, tol);
     let s_off_mult = cluster_score_near(clusters, (kf + 1.0) * founder_period, tol);
@@ -402,11 +416,7 @@ mod tests {
         // Case A: top=900 = 3 × founder=300, founder.score (0.20+0.10=0.30)
         // ≥ 0.1 × top.score (0.50). Harmonic check passes since no
         // (k+1)×founder = 1200 cluster exists.
-        let rows = vec![
-            row(1, 900, 0.50),
-            row(2, 298, 0.20),
-            row(3, 300, 0.10),
-        ];
+        let rows = vec![row(1, 900, 0.50), row(2, 298, 0.20), row(3, 300, 0.10)];
         let cfg = Config::default();
         let v = decide("hor_k3", &rows, &cfg);
         assert_eq!(v.kind, VerdictKind::Hor);
@@ -420,11 +430,7 @@ mod tests {
     #[test]
     fn monotonic_decay_is_simple_tr() {
         // top at 300, harmonics at 600/900 with monotonically decreasing scores.
-        let rows = vec![
-            row(1, 300, 0.50),
-            row(2, 600, 0.30),
-            row(3, 900, 0.15),
-        ];
+        let rows = vec![row(1, 300, 0.50), row(2, 600, 0.30), row(3, 900, 0.15)];
         let cfg = Config::default();
         let v = decide("tr_mono", &rows, &cfg);
         assert_eq!(v.kind, VerdictKind::SimpleTr);

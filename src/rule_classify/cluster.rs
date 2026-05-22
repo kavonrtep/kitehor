@@ -24,11 +24,7 @@ pub fn cluster_peaks(rows: &[PeakRow], tol: f64) -> Vec<Cluster> {
         return Vec::new();
     }
     let mut sorted: Vec<&PeakRow> = rows.iter().collect();
-    sorted.sort_by(|a, b| {
-        a.period
-            .cmp(&b.period)
-            .then(a.rank.cmp(&b.rank))
-    });
+    sorted.sort_by(|a, b| a.period.cmp(&b.period).then(a.rank.cmp(&b.rank)));
 
     // Build single-linkage groups.
     let mut groups: Vec<Vec<usize>> = vec![vec![0]];
@@ -51,11 +47,7 @@ pub fn cluster_peaks(rows: &[PeakRow], tol: f64) -> Vec<Cluster> {
         let periods: Vec<f64> = g.iter().map(|&i| sorted[i].period as f64).collect();
         let w_sum: f64 = weights.iter().sum();
         let rep = if w_sum > 0.0 {
-            let num: f64 = weights
-                .iter()
-                .zip(periods.iter())
-                .map(|(w, p)| w * p)
-                .sum();
+            let num: f64 = weights.iter().zip(periods.iter()).map(|(w, p)| w * p).sum();
             num / w_sum
         } else {
             // pandas mean of integer-valued floats: arithmetic mean

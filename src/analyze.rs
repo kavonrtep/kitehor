@@ -56,7 +56,11 @@ pub fn run(fasta: &Path, out_prefix: &Path, cfg: &Config) -> Result<Report> {
 
     // 1. FASTA → records.
     let records: Vec<(String, Vec<u8>)> = crate::ssr::io::read_fasta_ordered(fasta)?;
-    log::info!("analyze: loaded {} record(s) from {:?}", records.len(), fasta);
+    log::info!(
+        "analyze: loaded {} record(s) from {:?}",
+        records.len(),
+        fasta
+    );
     let array_records: Vec<ArrayRecord> = records
         .iter()
         .map(|(id, seq)| ArrayRecord::from_raw(id.clone(), seq))
@@ -126,41 +130,54 @@ pub fn run(fasta: &Path, out_prefix: &Path, cfg: &Config) -> Result<Report> {
         .collect();
 
     let ((subrepeat_res, ssr_res), hor_validate_res) = rayon::join(
-        || rayon::join(
-        || -> Result<()> {
-            let mut sum_rows: Vec<crate::subrepeat::scan::SummaryRow> = Vec::new();
-            let mut win_rows: Vec<crate::subrepeat::scan::WindowRow> = Vec::new();
-            let empty: Vec<crate::subrepeat::scan::PeakRow> = Vec::new();
-            for (rec_id, seq) in &records {
-                let peaks = kite_peaks_by_id.get(rec_id).unwrap_or(&empty);
-                let (s, w) = crate::subrepeat::scan::scan_record(rec_id, seq, peaks, &cfg.subrepeat);
-                sum_rows.push(s);
-                win_rows.extend(w);
-            }
-            crate::subrepeat::io::write_summary(
-                &crate::subrepeat::io::summary_path(out_prefix),
-                &sum_rows,
-            )?;
-            crate::subrepeat::io::write_windows(
-                &crate::subrepeat::io::windows_path(out_prefix),
-                &win_rows,
-            )?;
-            Ok(())
+        || {
+            rayon::join(
+                || -> Result<()> {
+                    let mut sum_rows: Vec<crate::subrepeat::scan::SummaryRow> = Vec::new();
+                    let mut win_rows: Vec<crate::subrepeat::scan::WindowRow> = Vec::new();
+                    let empty: Vec<crate::subrepeat::scan::PeakRow> = Vec::new();
+                    for (rec_id, seq) in &records {
+                        let peaks = kite_peaks_by_id.get(rec_id).unwrap_or(&empty);
+                        let (s, w) =
+                            crate::subrepeat::scan::scan_record(rec_id, seq, peaks, &cfg.subrepeat);
+                        sum_rows.push(s);
+                        win_rows.extend(w);
+                    }
+                    crate::subrepeat::io::write_summary(
+                        &crate::subrepeat::io::summary_path(out_prefix),
+                        &sum_rows,
+                    )?;
+                    crate::subrepeat::io::write_windows(
+                        &crate::subrepeat::io::windows_path(out_prefix),
+                        &win_rows,
+                    )?;
+                    Ok(())
+                },
+                || -> Result<()> {
+                    let mut sum_rows: Vec<crate::ssr::scan::SummaryRow> = Vec::new();
+                    let mut reg_rows: Vec<crate::ssr::scan::RegionRow> = Vec::new();
+                    for (rec_id, seq) in &records {
+                        let (s, r) = crate::ssr::scan::scan_record(
+                            rec_id,
+                            seq,
+                            top_periods.get(rec_id).copied(),
+                            &cfg.ssr,
+                        );
+                        sum_rows.push(s);
+                        reg_rows.extend(r);
+                    }
+                    crate::ssr::io::write_summary(
+                        &crate::ssr::io::summary_path(out_prefix),
+                        &sum_rows,
+                    )?;
+                    crate::ssr::io::write_regions(
+                        &crate::ssr::io::regions_path(out_prefix),
+                        &reg_rows,
+                    )?;
+                    Ok(())
+                },
+            )
         },
-        || -> Result<()> {
-            let mut sum_rows: Vec<crate::ssr::scan::SummaryRow> = Vec::new();
-            let mut reg_rows: Vec<crate::ssr::scan::RegionRow> = Vec::new();
-            for (rec_id, seq) in &records {
-                let (s, r) =
-                    crate::ssr::scan::scan_record(rec_id, seq, top_periods.get(rec_id).copied(), &cfg.ssr);
-                sum_rows.push(s);
-                reg_rows.extend(r);
-            }
-            crate::ssr::io::write_summary(&crate::ssr::io::summary_path(out_prefix), &sum_rows)?;
-            crate::ssr::io::write_regions(&crate::ssr::io::regions_path(out_prefix), &reg_rows)?;
-            Ok(())
-        },
-        ),
         || -> Result<()> {
             let rows = crate::hor_validate::scan::run(
                 &records,
@@ -227,8 +244,8 @@ fn write_kite_outputs(out_prefix: &Path, results: &[crate::kite::KiteResult]) ->
             std::fs::create_dir_all(parent)?;
         }
     }
-    let mut f = std::fs::File::create(&primary)
-        .with_context(|| format!("creating {:?}", &primary))?;
+    let mut f =
+        std::fs::File::create(&primary).with_context(|| format!("creating {:?}", &primary))?;
     writeln!(
         f,
         "case_id\tarray_length\tn_peaks_kept\tmonomer_size\tscore\tmonomer_size_2\tscore_2\tmonomer_size_3\tscore_3"

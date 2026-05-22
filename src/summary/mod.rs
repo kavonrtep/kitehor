@@ -133,10 +133,7 @@ mod tests {
     #[test]
     fn plain_tr() {
         let cfg = Config::default();
-        assert_eq!(
-            combined_class("simple_tr", "no", 0.0, "no", "", &cfg),
-            "tr"
-        );
+        assert_eq!(combined_class("simple_tr", "no", 0.0, "no", "", &cfg), "tr");
     }
 
     #[test]

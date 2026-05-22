@@ -17,9 +17,8 @@ fn root() -> PathBuf {
 
 fn parse_manifest() -> HashMap<String, String> {
     let path = root().join("test_data/ci_corpus/manifest.tsv");
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!("reading manifest {path:?}: {e}")
-    });
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading manifest {path:?}: {e}"));
     let mut out = HashMap::new();
     for line in text.lines().skip(1) {
         if line.is_empty() {

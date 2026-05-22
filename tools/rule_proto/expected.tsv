@@ -1,0 +1,7 @@
+case_id	verdict	founder_min	founder_max	multiplicity	tile_min	tile_max	notes
+hor_0002	hor	290	310	3	890	910	founder ~300, top is 3x
+hor_0011	hor	148	152	3	445	455	doc example 3 — non-monotonic at k=3
+hor_0013	hor	218	222	6	1310	1320	doc said k=5 but 1314/220=5.97 so k=6
+hor_0018	hor	98	102	2	195	205	doc says "2 or 4??"; primary expectation is k=2
+tr_0001	simple_tr	148	152	1	148	152	monotonic decay
+tr_0002	simple_tr	395	405	1	395	405	monotonic decay

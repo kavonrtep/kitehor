@@ -175,8 +175,7 @@ pub fn write_tsv(path: &Path, batches: &[Vec<PeriodsRow>]) -> Result<usize> {
             std::fs::create_dir_all(parent)?;
         }
     }
-    let mut f = std::fs::File::create(path)
-        .with_context(|| format!("creating {:?}", path))?;
+    let mut f = std::fs::File::create(path).with_context(|| format!("creating {:?}", path))?;
     writeln!(f, "{}", PERIODS_HEADER)?;
     let mut n = 0usize;
     for batch in batches {
@@ -254,10 +253,7 @@ mod tests {
 
     #[test]
     fn tandem_emits_single_high_score() {
-        let kr = mk_result(
-            "a1",
-            vec![mk_peak(178, 1.0), mk_peak(356, 0.1)],
-        );
+        let kr = mk_result("a1", vec![mk_peak(178, 1.0), mk_peak(356, 0.1)]);
         let v = RuleVerdict::Tandem { monomer_bp: 178 };
         let rows = build_rows(&kr, Some(&v));
         assert_eq!(rows.len(), 2);
@@ -288,7 +284,10 @@ mod tests {
         assert!((rows[2].period_score - 0.30).abs() < 1e-9);
         for r in &rows {
             assert_eq!(r.source, "kite_peak");
-            assert!(r.period_score < 0.85, "hints must stay below strong_period_score");
+            assert!(
+                r.period_score < 0.85,
+                "hints must stay below strong_period_score"
+            );
         }
     }
 
@@ -334,7 +333,9 @@ mod tests {
     fn secondaries_capped_at_top_3() {
         // 10 peaks; monomer is rank 1 (200). Top-3 are [200, 201, 202];
         // monomer takes 200 → secondaries = {201, 202}.
-        let peaks: Vec<KitePeak> = (0..10).map(|i| mk_peak(200 + i, 1.0 - 0.05 * i as f64)).collect();
+        let peaks: Vec<KitePeak> = (0..10)
+            .map(|i| mk_peak(200 + i, 1.0 - 0.05 * i as f64))
+            .collect();
         let kr = mk_result("a1", peaks);
         let v = RuleVerdict::Tandem { monomer_bp: 200 };
         let rows = build_rows(&kr, Some(&v));
@@ -375,11 +376,11 @@ mod tests {
         let kr = mk_result(
             "a1",
             vec![
-                mk_peak(100, 1.0),  // rank 1
-                mk_peak(200, 0.8),  // rank 2
-                mk_peak(300, 0.6),  // rank 3
-                mk_peak(400, 0.4),  // rank 4 — never emitted
-                mk_peak(500, 0.2),  // rank 5 — founder for this test
+                mk_peak(100, 1.0), // rank 1
+                mk_peak(200, 0.8), // rank 2
+                mk_peak(300, 0.6), // rank 3
+                mk_peak(400, 0.4), // rank 4 — never emitted
+                mk_peak(500, 0.2), // rank 5 — founder for this test
             ],
         );
         let v = RuleVerdict::Hor {
@@ -422,8 +423,10 @@ mod tests {
             share: 0.5,
         };
         let rows = build_rows(&kr, Some(&v));
-        let secondaries: Vec<&PeriodsRow> =
-            rows.iter().filter(|r| r.source == "kite_secondary").collect();
+        let secondaries: Vec<&PeriodsRow> = rows
+            .iter()
+            .filter(|r| r.source == "kite_secondary")
+            .collect();
         assert_eq!(secondaries.len(), 1);
         assert_eq!(secondaries[0].period_bp, 342);
     }

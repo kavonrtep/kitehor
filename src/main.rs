@@ -3,9 +3,9 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use kitehor::cli::{
-    AnalyzeArgs, Cli, Command, DetectArgs, DetectBatchArgs, HorValidateArgs,
-    KitePeriodicityArgs, RuleClassifyArgs, SimulateArgs, SimulateGridArgs, SsrScanArgs,
-    SubrepeatScanArgs, SummaryMergeArgs, SynthArgs, SynthBatchArgs, SynthValidateArgs,
+    AnalyzeArgs, Cli, Command, DetectArgs, DetectBatchArgs, HorValidateArgs, KitePeriodicityArgs,
+    RuleClassifyArgs, SimulateArgs, SimulateGridArgs, SsrScanArgs, SubrepeatScanArgs,
+    SummaryMergeArgs, SynthArgs, SynthBatchArgs, SynthValidateArgs,
 };
 use kitehor::io::{load_fasta, LoadQc, LoadStatus};
 use kitehor::kite::{analyze as kite_analyze, KiteConfig};
@@ -69,12 +69,7 @@ fn run_subrepeat_scan(args: SubrepeatScanArgs) -> Result<()> {
         host_sub_ratio_min: args.host_sub_ratio_min,
         min_window_bp: args.min_window_bp,
     };
-    let n = kitehor::subrepeat::run_subcommand(
-        &args.fasta,
-        &args.out,
-        &args.kite_peaks,
-        &cfg,
-    )?;
+    let n = kitehor::subrepeat::run_subcommand(&args.fasta, &args.out, &args.kite_peaks, &cfg)?;
     info!("subrepeat-scan: scanned {n} record(s)");
     Ok(())
 }
@@ -117,12 +112,7 @@ fn run_ssr_scan(args: SsrScanArgs) -> Result<()> {
         consensus_max_monomers: args.consensus_max_monomers,
         consensus_freq_ratio_min: args.consensus_freq_ratio_min,
     };
-    let n = kitehor::ssr::run_subcommand(
-        &args.fasta,
-        &args.out,
-        args.kite_peaks.as_deref(),
-        &cfg,
-    )?;
+    let n = kitehor::ssr::run_subcommand(&args.fasta, &args.out, args.kite_peaks.as_deref(), &cfg)?;
     info!("ssr-scan: scanned {n} record(s)");
     Ok(())
 }
@@ -168,7 +158,9 @@ fn run_rule_classify(args: RuleClassifyArgs) -> Result<()> {
 // detect / detect-batch
 // ---------------------------------------------------------------------------
 
-fn load_detector_config(path: Option<&std::path::PathBuf>) -> Result<kitehor::detect::DetectorConfig> {
+fn load_detector_config(
+    path: Option<&std::path::PathBuf>,
+) -> Result<kitehor::detect::DetectorConfig> {
     match path {
         Some(p) => kitehor::detect::DetectorConfig::load(p),
         None => {
@@ -267,16 +259,16 @@ fn run_detect_batch(args: DetectBatchArgs) -> Result<()> {
             kitehor::detect::run_batch_auto(&args.fasta_dir, &args.out_dir, &cfg, &viz_flags)?
         }
     };
-    info!("detect-batch: processed {n} array(s) into {:?}", args.out_dir);
+    info!(
+        "detect-batch: processed {n} array(s) into {:?}",
+        args.out_dir
+    );
     Ok(())
 }
 
 fn run_synth(args: SynthArgs) -> Result<()> {
     kitehor::synth::run_one(&args.config, &args.out, args.seed, args.diagnostics)?;
-    info!(
-        "synth: wrote {:?}.fa / .truth.tsv / .periods.tsv",
-        args.out
-    );
+    info!("synth: wrote {:?}.fa / .truth.tsv / .periods.tsv", args.out);
     Ok(())
 }
 
@@ -293,10 +285,7 @@ fn run_synth_batch(args: SynthBatchArgs) -> Result<()> {
         args.seed_offset,
         args.diagnostics,
     )?;
-    info!(
-        "synth-batch: wrote {} bundle(s) to {:?}",
-        n, args.out_dir
-    );
+    info!("synth-batch: wrote {} bundle(s) to {:?}", n, args.out_dir);
     Ok(())
 }
 

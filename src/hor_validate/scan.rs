@@ -266,14 +266,15 @@ fn apply_density_or_skip(
         .map(|i| phase_present[i] as f64 / phase_total[i] as f64)
         .collect();
     if frac_per_bin.len() >= 2 {
-        let max_f = frac_per_bin.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let max_f = frac_per_bin
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max);
         let min_f = frac_per_bin.iter().cloned().fold(f64::INFINITY, f64::min);
         let contrast = max_f - min_f;
         row.phase_contrast = fmt_round4(contrast);
-        let is_dup =
-            density <= cfg.density_dup_max || contrast >= cfg.phase_contrast_dup_min;
-        let is_hor =
-            density >= cfg.density_hor_min && contrast <= cfg.phase_contrast_hor_max;
+        let is_dup = density <= cfg.density_dup_max || contrast >= cfg.phase_contrast_dup_min;
+        let is_hor = density >= cfg.density_hor_min && contrast <= cfg.phase_contrast_hor_max;
         row.density_hint = if is_dup {
             "localized_duplication".into()
         } else if is_hor {

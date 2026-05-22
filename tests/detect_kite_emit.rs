@@ -53,7 +53,10 @@ fn kite_emit_periods_then_detect_succeeds() {
         String::from_utf8_lossy(&o.stdout),
         String::from_utf8_lossy(&o.stderr)
     );
-    assert!(periods_tsv.exists(), "--emit-periods did not write the file");
+    assert!(
+        periods_tsv.exists(),
+        "--emit-periods did not write the file"
+    );
 
     let periods = std::fs::read_to_string(&periods_tsv).unwrap();
     let mut lines = periods.lines();
@@ -135,12 +138,17 @@ fn kite_emit_periods_then_detect_succeeds() {
     );
     // Header column count must match the frozen schema (20 columns).
     let header_cols: Vec<&str> = prop_lines[0].split('\t').collect();
-    assert_eq!(header_cols.len(), 20, "properties.tsv header column count drift");
+    assert_eq!(
+        header_cols.len(),
+        20,
+        "properties.tsv header column count drift"
+    );
     // Every data row matches header column count.
     for row in &prop_lines[1..] {
         let f: Vec<&str> = row.split('\t').collect();
         assert_eq!(
-            f.len(), header_cols.len(),
+            f.len(),
+            header_cols.len(),
             "row column count mismatch: {row:?}"
         );
     }

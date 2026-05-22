@@ -102,7 +102,7 @@ conda/kitehor/          conda recipe
 docs/                 project docs
   rule_proto.md       ← the rule-proto pipeline (current default)
   rule.md             archived — the older 4-condition rule (P1 retirement)
-  ci-status.md        ← CI/release plan + runbook
+  release.md          ← tag → release pipeline runbook
   new/                ← v2 simulator + detector design docs
     taxonomy.md         structural taxonomy of tandem-repeat arrays
     detect_spec.md      line-width detector design (future work)
@@ -115,7 +115,7 @@ docs/                 project docs
 ## Project docs
 
 All non-README, non-CLAUDE documentation lives in `docs/`. Start with
-[`docs/ci-status.md`](docs/ci-status.md) for the CI/CD plan, locked
+[`docs/release.md`](docs/release.md) for the tag → release runbook, locked
 decisions, and the release runbook. Add new topic docs as
 `docs/<topic>.md` siblings; do not scatter markdown at the repo root.
 v2 simulator + detector design docs live in

@@ -163,7 +163,11 @@ pub fn write_clusters_dump(dir: &Path, case_id: &str, clusters: &[Cluster]) -> R
     });
     for c in sorted {
         let rep = (c.rep_period * 100.0).round() / 100.0;
-        let frac = if max_s > 0.0 { c.total_score / max_s } else { 0.0 };
+        let frac = if max_s > 0.0 {
+            c.total_score / max_s
+        } else {
+            0.0
+        };
         let periods_csv: String = c
             .periods
             .iter()

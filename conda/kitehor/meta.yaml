@@ -1,16 +1,9 @@
 {# -----------------------------------------------------------------
- # Version is parsed from a copy of the repo-root Cargo.toml that the
- # CI workflow drops into this recipe directory before invoking
- # conda-build (`cp Cargo.toml conda/kitehor/Cargo.toml`). The same step
- # works manually for local builds.
- #
- # `\nversion` anchors to start-of-line so `rust-version = "..."` later
- # in the file does not match.
+ # Version comes from the CI workflow's `KITEHOR_VERSION` env var
+ # (set from the parsed tag); defaults to "0.0.0.dev" for ad-hoc
+ # local builds. Mirrors the pattern dottir's recipe uses.
  # ----------------------------------------------------------------- #}
-{% set m = load_file_regex(load_file='Cargo.toml',
-                           regex_pattern='\\nversion\\s*=\\s*"([^"]+)"',
-                           from_recipe_dir=True) %}
-{% set version = m.group(1) if m else '0.0.0.dev' %}
+{% set version = environ.get("KITEHOR_VERSION", "0.0.0.dev") %}
 
 package:
   name: kitehor
@@ -26,10 +19,8 @@ build:
   script:
     # `cargo install --locked` enforces the committed Cargo.lock.
     # `--no-track` skips writing $PREFIX/.crates.toml + .crates2.json
-    # (would pollute the env's metadata).
-    # `--bin kitehor` only installs the binary, not other workspace
-    # members.
-    # `--path .` builds the current crate (root of the source tree).
+    # (which would pollute the env's metadata).
+    # `--bin kitehor` installs only the binary, not other artefacts.
     - cargo install --locked --no-track --bin kitehor --root $PREFIX --path .
 
 requirements:
@@ -40,21 +31,21 @@ requirements:
 
 test:
   commands:
-    # Version pin: ensures the binary in the package reports the
-    # version we built it for (catches stale lockfile / wrong checkout).
+    # Version pin: the binary in the package must report the version
+    # we built it for (catches stale lockfile / wrong checkout).
     - kitehor --version | grep -F "{{ version }}"
     - kitehor --help | grep -qi 'kitehor'
     - kitehor kite-periodicity --help | grep -qi 'classify'
-    # End-to-end functional smoke: simulate a tiny k=3 HOR and
-    # classify it. Exercises the simulator + kite + feature pipeline
-    # + baked-in classifier + verdict logic in one go.
+    - kitehor analyze --help | grep -qi 'analyze'
+    # Functional smoke: simulate a tiny HOR, run analyze end-to-end,
+    # confirm the per-stage outputs were written and the summary row
+    # exists.
     - kitehor simulate --monomer-size 100 --multiplicity 3 --copies 80
-        --sub-rate-intra 0.10 --sub-rate-inter 0.05 --seed 7
-        -o smoke.fa
-    - kitehor kite-periodicity smoke.fa -o smoke.tsv
-        --classify --no-hor-call
-    - test -s smoke.tsv
-    - grep -E "^sim_0000\\s" smoke.tsv
+        --sub-rate-intra 0.04 --sub-rate-inter 0.02
+        --case-id sim_smoke --out smoke.fa
+    - kitehor analyze smoke.fa -o smoke
+    - test -s smoke.summary.tsv
+    - test -s smoke.verdicts.tsv
 
 about:
   home: https://github.com/kavonrtep/kitehor
@@ -65,9 +56,9 @@ about:
     - LICENSE-MIT
     - LICENSE-APACHE
   summary: >
-    Kite-first probabilistic Higher-Order Repeat (HOR) detector for
-    tandem-repeat array FASTA sequences. Sequence-agnostic: no monomer
-    consensus, no species library, no neural network.
+    Sequence-agnostic Higher-Order Repeat (HOR) detector for tandem-repeat
+    array FASTA. Rule-based pipeline on kite k-mer periodograms — no
+    supplied monomer consensus, no species library, no neural network.
 
 extra:
   recipe-maintainers:

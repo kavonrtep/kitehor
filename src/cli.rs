@@ -562,7 +562,10 @@ pub struct SsrScanArgs {
     pub consensus_freq_ratio_min: f64,
     /// Per-motif-length minimum repeat counts as `"L:reps,L:reps,…"`.
     /// Default: TideCluster — `"1:20,2:9,3:6,4:5,5:5,6:5,7:5,8:5,9:5,10:5,11:5,12:5,13:5,14:5"`.
-    #[arg(long, default_value = "1:20,2:9,3:6,4:5,5:5,6:5,7:5,8:5,9:5,10:5,11:5,12:5,13:5,14:5")]
+    #[arg(
+        long,
+        default_value = "1:20,2:9,3:6,4:5,5:5,6:5,7:5,8:5,9:5,10:5,11:5,12:5,13:5,14:5"
+    )]
     pub motif_min_reps: String,
 }
 

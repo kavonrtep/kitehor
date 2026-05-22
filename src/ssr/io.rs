@@ -78,9 +78,7 @@ pub fn read_kite_top_periods(path: &Path) -> Result<AHashMap<String, usize>> {
         let case_id = cells[case_idx].to_string();
         let period: usize = cells[period_idx].parse().unwrap_or(0);
         let score: f64 = cells[score_idx].parse().unwrap_or(0.0);
-        let entry = best
-            .entry(case_id)
-            .or_insert((f64::NEG_INFINITY, 0usize));
+        let entry = best.entry(case_id).or_insert((f64::NEG_INFINITY, 0usize));
         if score > entry.0 {
             *entry = (score, period);
         }

@@ -76,7 +76,10 @@ fn smoke_classifier_verdicts_match_truth() {
         rows.iter().map(|r| (r["case_id"].clone(), r)).collect();
 
     let tandem = by_id.get("tandem_pure").expect("tandem_pure missing");
-    assert_eq!(tandem["verdict"], "simple_tr", "tandem_pure verdict mismatch");
+    assert_eq!(
+        tandem["verdict"], "simple_tr",
+        "tandem_pure verdict mismatch"
+    );
 
     let hor3 = by_id.get("hor_k3").expect("hor_k3 missing");
     assert_eq!(hor3["verdict"], "hor", "hor_k3 verdict");

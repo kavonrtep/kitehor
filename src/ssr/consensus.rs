@@ -50,9 +50,7 @@ pub fn extract_consensus_monomers(
     // governed by position-of-first-occurrence which strongly correlates
     // with high-count kmers appearing early).
     let mut pairs: Vec<(Vec<u8>, u64)> = counts.into_iter().collect();
-    pairs.sort_by(|a, b| {
-        b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0))
-    });
+    pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
     let mut seen_canonical: AHashMap<String, ()> = AHashMap::new();
     let mut result: Vec<ConsensusEntry> = Vec::new();
@@ -119,6 +117,9 @@ mod tests {
         let d = build_consensus_dimer("GT", 4, 30);
         assert!(d.len() >= 30);
         // GT * 4 = 8 bp; we need at least 30 → keep adding GTs.
-        assert_eq!(&d[..], "G".repeat(0).as_str().to_owned() + "GTGTGTGTGTGTGTGTGTGTGTGTGTGTGT");
+        assert_eq!(
+            &d[..],
+            "G".repeat(0).as_str().to_owned() + "GTGTGTGTGTGTGTGTGTGTGTGTGTGTGT"
+        );
     }
 }

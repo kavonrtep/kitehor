@@ -234,7 +234,10 @@ pub fn merge_inputs(
             .get("hor_verdict")
             .map(String::as_str)
             .unwrap_or("unresolved");
-        let sub_f = r.get("subrepeat_flag").map(String::as_str).unwrap_or("none");
+        let sub_f = r
+            .get("subrepeat_flag")
+            .map(String::as_str)
+            .unwrap_or("none");
         let ssr_f = r.get("ssr_flag").map(String::as_str).unwrap_or("no");
         let dom_pct = r
             .get("ssr_dominant_motif_coverage_pct")
@@ -258,21 +261,36 @@ pub fn merge_inputs(
         .filter(|c| {
             match *c {
                 // Always present from the merge logic
-                "record_id" | "length_bp" | "hor_verdict" | "hor_founder"
-                | "hor_multiplicity" | "hor_tile" | "hor_confidence" | "subrepeat_flag"
-                | "subrepeat_host_period_bp" | "subrepeat_period_bp"
-                | "n_subrepeat_blocks" | "subrepeat_coverage_pct" | "ssr_flag"
-                | "ssr_dominant_motif" | "ssr_dominant_motif_length"
-                | "ssr_dominant_motif_repeats" | "ssr_dominant_motif_coverage_pct"
-                | "ssr_total_coverage_pct" | "ssr_top_motifs" => true,
+                "record_id"
+                | "length_bp"
+                | "hor_verdict"
+                | "hor_founder"
+                | "hor_multiplicity"
+                | "hor_tile"
+                | "hor_confidence"
+                | "subrepeat_flag"
+                | "subrepeat_host_period_bp"
+                | "subrepeat_period_bp"
+                | "n_subrepeat_blocks"
+                | "subrepeat_coverage_pct"
+                | "ssr_flag"
+                | "ssr_dominant_motif"
+                | "ssr_dominant_motif_length"
+                | "ssr_dominant_motif_repeats"
+                | "ssr_dominant_motif_coverage_pct"
+                | "ssr_total_coverage_pct"
+                | "ssr_top_motifs" => true,
                 "combined_class" => true,
                 "density_hint" => true,
                 "founder_density" | "phase_contrast" | "density_n_windows" => has_within_extra,
-                "ssr_method" | "consensus_period_bp" | "consensus_monomer"
-                | "ssr_raw_dominant_motif" | "ssr_raw_dominant_motif_coverage_pct"
-                | "ssr_raw_total_coverage_pct" | "ssr_raw_n_regions" | "ssr_raw_top_motifs" => {
-                    has_ssr_optional.contains(c)
-                }
+                "ssr_method"
+                | "consensus_period_bp"
+                | "consensus_monomer"
+                | "ssr_raw_dominant_motif"
+                | "ssr_raw_dominant_motif_coverage_pct"
+                | "ssr_raw_total_coverage_pct"
+                | "ssr_raw_n_regions"
+                | "ssr_raw_top_motifs" => has_ssr_optional.contains(c),
                 _ => false,
             }
         })
@@ -366,7 +384,10 @@ fn build_ssr(
         ("dominant_motif", "ssr_dominant_motif"),
         ("dominant_motif_length", "ssr_dominant_motif_length"),
         ("dominant_motif_repeats", "ssr_dominant_motif_repeats"),
-        ("dominant_motif_coverage_pct", "ssr_dominant_motif_coverage_pct"),
+        (
+            "dominant_motif_coverage_pct",
+            "ssr_dominant_motif_coverage_pct",
+        ),
         ("total_ssr_coverage_pct", "ssr_total_coverage_pct"),
         ("top_motifs", "ssr_top_motifs"),
     ];
@@ -465,7 +486,13 @@ fn read_tsv(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>)> {
         }
         let cells: Vec<String> = line
             .split('\t')
-            .map(|s| if is_pandas_na(s) { "".to_string() } else { s.to_string() })
+            .map(|s| {
+                if is_pandas_na(s) {
+                    "".to_string()
+                } else {
+                    s.to_string()
+                }
+            })
             .collect();
         rows.push(cells);
     }

@@ -27,11 +27,11 @@ pub mod wrap;
 
 pub use config::DetectorConfig;
 pub use consensus::ConsensusRecord;
-pub use viz::VizFlags;
 pub use types::{
-    Class, ClassHint, PeriodCandidate, Properties, Segment, WidthFeatures,
-    PROPERTIES_HEADER, SEGMENTS_HEADER, WIDTH_FEATURES_HEADER,
+    Class, ClassHint, PeriodCandidate, Properties, Segment, WidthFeatures, PROPERTIES_HEADER,
+    SEGMENTS_HEADER, WIDTH_FEATURES_HEADER,
 };
+pub use viz::VizFlags;
 
 use crate::emit_periods::{build_rows, PeriodsRow};
 use crate::io::{load_fasta, LoadQc, LoadStatus, LoadedRecord};
@@ -307,8 +307,7 @@ fn emit_viz(
     } else {
         None
     };
-    let column_edge_rate_vec: Option<Vec<f64>> =
-        edge.as_ref().map(|e| e.column_edge_rate.clone());
+    let column_edge_rate_vec: Option<Vec<f64>> = edge.as_ref().map(|e| e.column_edge_rate.clone());
     let shift_feats = if n_rows >= 2 {
         shift::compute(&arr.seq, base_w, n_rows, cfg)
     } else {
@@ -378,22 +377,18 @@ fn compute_mixed_blocks_context(
         .phase_shift_positions
         .iter()
         .filter_map(|&bp| {
-            if comparison_width == 0 { return None; }
+            if comparison_width == 0 {
+                return None;
+            }
             Some(bp / comparison_width)
         })
         .collect();
 
-    let blocks = analysis_blocks::build_blocks(
-        n_rows_cmp,
-        unit_rows_in_cmp,
-        &extra_splits,
-        cfg,
-    );
+    let blocks = analysis_blocks::build_blocks(n_rows_cmp, unit_rows_in_cmp, &extra_splits, cfg);
     if blocks.len() < 2 {
         return None;
     }
-    let mut consensuses =
-        analysis_blocks::block_consensuses(&arr.seq, comparison_width, &blocks);
+    let mut consensuses = analysis_blocks::block_consensuses(&arr.seq, comparison_width, &blocks);
     // M7.2 calibration (2026-05-17): drop blocks whose per-block
     // column IC is below `ic_threshold_hor_unit`. These are
     // "unstructured" blocks (e.g., the foreign sequence inside a
@@ -409,13 +404,7 @@ fn compute_mixed_blocks_context(
         if consensuses[i].is_none() {
             continue;
         }
-        let ic = block_column_ic(
-            &arr.seq,
-            comparison_width,
-            blk.start_row,
-            blk.end_row,
-            &bg,
-        );
+        let ic = block_column_ic(&arr.seq, comparison_width, blk.start_row, blk.end_row, &bg);
         if ic < cfg.ic_threshold_hor_base {
             consensuses[i] = None;
         }
@@ -454,10 +443,22 @@ fn block_column_ic(
         let mut n_acgt = 0usize;
         for r in start_row..end {
             match seq[r * width + c] {
-                b'A' => { counts[0] += 1; n_acgt += 1; }
-                b'C' => { counts[1] += 1; n_acgt += 1; }
-                b'G' => { counts[2] += 1; n_acgt += 1; }
-                b'T' => { counts[3] += 1; n_acgt += 1; }
+                b'A' => {
+                    counts[0] += 1;
+                    n_acgt += 1;
+                }
+                b'C' => {
+                    counts[1] += 1;
+                    n_acgt += 1;
+                }
+                b'G' => {
+                    counts[2] += 1;
+                    n_acgt += 1;
+                }
+                b'T' => {
+                    counts[3] += 1;
+                    n_acgt += 1;
+                }
                 _ => {}
             }
         }
@@ -497,7 +498,6 @@ fn worst_pair_identity(ctx: &segment::MixedBlocksContext) -> Option<(f64, usize,
         .map(|p| (p.identity, p.i, p.j))
 }
 
-
 /// M4 per-array work: produces a real `class` + supporting fields by
 /// running the classify module over `width_features`. Then layers M3.5
 /// Pass-B phase-shift offset recovery on top, using the chosen
@@ -513,7 +513,11 @@ fn run_array_m4(
     arr: &ArrayRecord,
     pers: &[PeriodCandidate],
     cfg: &DetectorConfig,
-) -> (Properties, Vec<WidthFeatures>, Option<segment::MixedBlocksContext>) {
+) -> (
+    Properties,
+    Vec<WidthFeatures>,
+    Option<segment::MixedBlocksContext>,
+) {
     let (mut props_m35, widths) = run_array_m3_5(arr, pers, cfg);
     // DH4: capture the pre-decision width BEFORE the classify-result
     // copy overwrites props_m35.base_width_bp.
@@ -603,7 +607,9 @@ fn run_array_m4(
                          (block {} vs {} of {} at width {}; was {})",
                         min_id,
                         cfg.stratification_diff_threshold,
-                        i, j, n_blocks,
+                        i,
+                        j,
+                        n_blocks,
                         ctx.comparison_width,
                         original_class,
                     );
@@ -638,8 +644,7 @@ fn run_array_m4(
                             .wobble_amplitude_bp
                             .map(|w_amp| w_amp.abs() / bw.max(1) as f64)
                             .unwrap_or(0.0);
-                        let wobble_dominates = wobble_frac >= 0.05
-                            && props_m35.n_phase_shifts == 0;
+                        let wobble_dominates = wobble_frac >= 0.05 && props_m35.n_phase_shifts == 0;
                         if !wobble_dominates {
                             props_m35.class = Class::IrregularHOR;
                             props_m35.reason = format!(
@@ -690,8 +695,7 @@ fn run_array_m4(
                             .collect();
                         props_m35.n_phase_shifts = positions.len();
                         props_m35.phase_shift_positions = positions;
-                        props_m35.phase_shift_offsets =
-                            offsets.iter().map(|&v| v as i64).collect();
+                        props_m35.phase_shift_offsets = offsets.iter().map(|&v| v as i64).collect();
                         props_m35.n_segments = 1 + props_m35.n_phase_shifts;
                         props_m35.mean_shift_bp = Some(shift_feats.mean_shift_bp);
                         props_m35.wobble_amplitude_bp = Some(shift_feats.wobble_amplitude_bp);
@@ -735,7 +739,9 @@ fn run_array_m3_5(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     let primary = periods_sorted.iter().find_map(|p| {
-        widths.iter().find(|w| w.width_bp == p.period_bp && w.rows >= 2)
+        widths
+            .iter()
+            .find(|w| w.width_bp == p.period_bp && w.rows >= 2)
     });
     if let Some(w) = primary {
         let width = w.width_bp;
@@ -914,22 +920,24 @@ pub fn run_batch(
     std::fs::create_dir_all(out_dir)?;
     let pairs = discover_pairs(fasta_dir, periods_dir, allow_extra_periods)?;
     let n = pairs.len();
-    pairs.par_iter().try_for_each(|(fa, pe, stem)| -> Result<()> {
-        let prefix = out_dir.join(stem);
-        // Per-file invocations always pass `allow_extra_periods=true`
-        // here because the batch loop already checked symmetry at the
-        // directory level (`discover_pairs`).
-        run_one(
-            fa,
-            pe,
-            &prefix,
-            cfg,
-            viz_flags,
-            allow_missing_periods,
-            /*allow_extra_periods=*/ true,
-        )
-        .map(|_| ())
-    })?;
+    pairs
+        .par_iter()
+        .try_for_each(|(fa, pe, stem)| -> Result<()> {
+            let prefix = out_dir.join(stem);
+            // Per-file invocations always pass `allow_extra_periods=true`
+            // here because the batch loop already checked symmetry at the
+            // directory level (`discover_pairs`).
+            run_one(
+                fa,
+                pe,
+                &prefix,
+                cfg,
+                viz_flags,
+                allow_missing_periods,
+                /*allow_extra_periods=*/ true,
+            )
+            .map(|_| ())
+        })?;
     Ok(n)
 }
 
@@ -1000,7 +1008,8 @@ fn discover_pairs(
         if !periods_path.exists() {
             anyhow::bail!(
                 "FASTA {:?} has no matching periods TSV at {:?}",
-                p, periods_path
+                p,
+                periods_path
             );
         }
         out.push((p, periods_path, stem));
@@ -1024,7 +1033,9 @@ fn discover_pairs(
             anyhow::bail!(
                 "periods directory {:?} contains {} unmatched files: {:?}; \
                  pass `--allow-extra-periods` to ignore them",
-                periods_dir, extras.len(), extras
+                periods_dir,
+                extras.len(),
+                extras
             );
         }
     }

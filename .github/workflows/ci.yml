@@ -1,4 +1,4 @@
-name: ci
+name: CI
 
 on:
   push:
@@ -6,59 +6,44 @@ on:
   pull_request:
     branches: [main]
 
-# Cancel an in-progress run of the same ref when a newer push lands.
-# `github.ref` distinguishes push-to-branch from PR refs, so a feature
-# branch with an open PR runs both independently.
+# Cancel an in-progress run when a newer push lands on the same ref.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
-  # Surface backtraces on test failures.
   RUST_BACKTRACE: short
+  # Opt third-party JS actions (rust-toolchain, rust-cache) into the
+  # Node 24 runtime ahead of GitHub's June 2026 forced cutover.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  rust:
-    name: build + lint + test (ubuntu)
+  fmt:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-
-      # `rust-toolchain.toml` at the repo root pins the channel + the
-      # rustfmt / clippy components. `rustup show` installs the pinned
-      # toolchain (and its components) on first invocation.
-      - name: Install pinned toolchain
-        run: |
-          rustup show
-          rustc --version
-          cargo --version
-
-      - name: Cache cargo registry + target/
-        uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          # Bump the cache prefix when you want to invalidate everything
-          # without changing a workflow file (e.g., after a toolchain
-          # bump that ABI-broke artefacts).
-          prefix-key: v1
-          shared-key: ${{ runner.os }}-rust
+          components: rustfmt
+      - run: cargo fmt --all --check
 
-      - name: cargo fmt --check
-        run: cargo fmt --all -- --check
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --release --all-targets --locked --no-deps -- -D warnings
 
-      - name: cargo clippy
-        run: cargo clippy --release --all-targets --no-deps -- -D warnings
-
-      - name: cargo test (unit)
-        run: cargo test --release --lib
-
-      - name: cargo build --release
-        run: cargo build --release
-
-      - name: integration smoke test
-        # `integration_smoke` is `#[ignore]`'d by default so quick local
-        # `cargo test` stays fast; CI opts in explicitly. The test spawns
-        # the built binary on `test_data/smoke/sequences.fasta` and
-        # checks the verdicts byte-for-byte.
-        run: cargo test --release --test integration_smoke -- --ignored
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - run: cargo test --release --locked

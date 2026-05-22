@@ -168,7 +168,12 @@ fn summarise_hits(hits: &[Hit], length_bp: usize, threshold_pct: f64) -> ScanOut
         .collect::<Vec<_>>()
         .join(";");
     let summary = PartialSummary {
-        ssr_flag: if dom_pct >= threshold_pct { "yes" } else { "no" }.into(),
+        ssr_flag: if dom_pct >= threshold_pct {
+            "yes"
+        } else {
+            "no"
+        }
+        .into(),
         n_ssr_regions: hits.len() as u64,
         dominant_motif: dom_m,
         dominant_motif_length: dom_d.motif_length.to_string(),
@@ -192,10 +197,7 @@ fn build_multimotif_summary(
     length_bp: usize,
     threshold_pct: f64,
 ) -> PartialSummary {
-    let map: AHashMap<&str, &ByMotif> = raw_by_motif
-        .iter()
-        .map(|(k, v)| (k.as_str(), v))
-        .collect();
+    let map: AHashMap<&str, &ByMotif> = raw_by_motif.iter().map(|(k, v)| (k.as_str(), v)).collect();
     let mut rows: Vec<(String, ByMotif)> = validated_canonicals
         .iter()
         .filter_map(|c| map.get(c.as_str()).map(|d| (c.clone(), (*d).clone())))
@@ -223,7 +225,12 @@ fn build_multimotif_summary(
         .join(";");
     let n_regions = rows.iter().map(|(_, d)| d.n_regions).sum();
     PartialSummary {
-        ssr_flag: if dom_pct >= threshold_pct { "yes" } else { "no" }.into(),
+        ssr_flag: if dom_pct >= threshold_pct {
+            "yes"
+        } else {
+            "no"
+        }
+        .into(),
         n_ssr_regions: n_regions,
         dominant_motif: dom_m,
         dominant_motif_length: dom_d.motif_length.to_string(),
