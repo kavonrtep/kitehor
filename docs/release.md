@@ -100,17 +100,22 @@ kitehor --root $PREFIX --path .`. The `test:` block runs `--version`,
 `--help`, and an end-to-end `analyze` on a `kitehor simulate`-built
 synthetic FASTA.
 
-## First release: v0.9.0
+## First release: v0.9.1
+
+v0.9.0 was attempted but the conda job failed at the recipe-render
+step (multi-line `{# … #}` jinja comment that conda-build's parser
+rejected — fixed in `fdf78c2`). v0.9.1 is the first release that
+ships a published conda package.
 
 Pre-flight passed:
 - 352 tests pass, 0 fail (`cargo test --release --locked`).
 - `cargo clippy -- -D warnings` clean.
 - `cargo fmt --check` clean.
-- Local `kitehor --version` reports `0.9.0`.
+- Local `kitehor --version` reports `0.9.1`.
 
 To ship:
 
 ```bash
-git tag v0.9.0
-git push origin v0.9.0
+git tag v0.9.1
+git push origin v0.9.1
 ```
