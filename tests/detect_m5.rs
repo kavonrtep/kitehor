@@ -17,7 +17,10 @@ fn kitehor_bin() -> std::path::PathBuf {
 fn synth_then(yaml: &str, det_flags: &[&str]) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join("cfg.yaml");
-    std::fs::File::create(&cfg).unwrap().write_all(yaml.as_bytes()).unwrap();
+    std::fs::File::create(&cfg)
+        .unwrap()
+        .write_all(yaml.as_bytes())
+        .unwrap();
     let synth = dir.path().join("arr");
     let o = Command::new(kitehor_bin())
         .args(["synth"])
@@ -127,7 +130,10 @@ structure:
     n_copies: 200
 "#;
     let cfg = dir.path().join("cfg.yaml");
-    std::fs::File::create(&cfg).unwrap().write_all(yaml.as_bytes()).unwrap();
+    std::fs::File::create(&cfg)
+        .unwrap()
+        .write_all(yaml.as_bytes())
+        .unwrap();
     let synth = dir.path().join("arr");
     Command::new(kitehor_bin())
         .args(["synth"])
@@ -204,7 +210,10 @@ structure:
     let tsv = arr_dir.join("raster_w100.tsv");
     let png = arr_dir.join("raster_w100.png");
     assert!(tsv.exists(), "raster TSV missing");
-    assert!(png.exists(), "raster PNG missing (default viz build should produce it)");
+    assert!(
+        png.exists(),
+        "raster PNG missing (default viz build should produce it)"
+    );
     let bytes = std::fs::read(&png).unwrap();
     assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "not a PNG file");
 }

@@ -55,14 +55,12 @@ pub fn expand(
     let mut st = SimState::default();
     for (bi, block) in structure.iter().enumerate() {
         match block {
-            Block::HOR {
-                template,
-                n_copies,
-            } => emit_hor(bi, template, *n_copies, templates, &mut st)?,
-            Block::SIMPLE_TR {
-                template,
-                n_copies,
-            } => emit_simple_tr(bi, template, *n_copies, templates, &mut st)?,
+            Block::HOR { template, n_copies } => {
+                emit_hor(bi, template, *n_copies, templates, &mut st)?
+            }
+            Block::SIMPLE_TR { template, n_copies } => {
+                emit_simple_tr(bi, template, *n_copies, templates, &mut st)?
+            }
             Block::SHIFT { offset_bp } => emit_shift(bi, *offset_bp, &mut st, rng)?,
             Block::INSERTION { length_bp, kind } => {
                 emit_insertion(bi, *length_bp, *kind, &mut st, rng)?
@@ -128,12 +126,7 @@ fn emit_simple_tr(
     Ok(())
 }
 
-fn emit_shift(
-    bi: usize,
-    offset_bp: i64,
-    st: &mut SimState,
-    rng: &mut ChaCha20Rng,
-) -> Result<()> {
+fn emit_shift(bi: usize, offset_bp: i64, st: &mut SimState, rng: &mut ChaCha20Rng) -> Result<()> {
     if offset_bp > 0 {
         let n = offset_bp as usize;
         let start = st.sequence.len();
@@ -210,9 +203,7 @@ fn draw_local_composition(out: &[u8], n: usize, rng: &mut ChaCha20Rng) -> Vec<u8
         out
     } else {
         // Empty prefix → uniform random ACGT
-        return (0..n)
-            .map(|_| b"ACGT"[rng.random_range(0..4)])
-            .collect();
+        return (0..n).map(|_| b"ACGT"[rng.random_range(0..4)]).collect();
     };
     (0..n)
         .map(|_| source[rng.random_range(0..source.len())])

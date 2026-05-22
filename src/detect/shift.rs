@@ -89,12 +89,12 @@ pub(crate) fn match_at_shift(prev: &[u8], next: &[u8], s: i32) -> f64 {
     }
     let mut matched = 0usize;
     let mut compared = 0usize;
-    for c in 0..w {
+    for (c, &pv) in prev.iter().enumerate() {
         let other = c as i32 + s;
         if other < 0 || other >= w as i32 {
             continue;
         }
-        if prev[c] == next[other as usize] {
+        if pv == next[other as usize] {
             matched += 1;
         }
         compared += 1;
@@ -212,9 +212,9 @@ fn mode_per_column(window: &[u8], width: usize) -> Vec<u8> {
 fn count_matches_circular(prev: &[u8], post: &[u8], s: i32) -> usize {
     let w = prev.len() as i32;
     let mut matched = 0usize;
-    for c in 0..prev.len() {
+    for (c, &pv) in prev.iter().enumerate() {
         let other = (c as i32 + s).rem_euclid(w) as usize;
-        if prev[c] == post[other] && prev[c] != b'N' {
+        if pv == post[other] && pv != b'N' {
             matched += 1;
         }
     }
@@ -271,8 +271,8 @@ fn fft_periodicity(best_shift: &[i32], width: usize) -> Option<f64> {
 
     // Look at bins 2..n/2 (skip DC = 0 and the trivial first harmonic).
     let mut best = (0usize, 0.0f32);
-    for k in 2..n / 2 {
-        let mag = buf[k].norm_sqr();
+    for (k, bin) in buf.iter().enumerate().take(n / 2).skip(2) {
+        let mag = bin.norm_sqr();
         if mag > best.1 {
             best = (k, mag);
         }
@@ -309,7 +309,7 @@ mod tests {
         // next = prev shifted right by 2.
         let prev = b"ACGTACGTAC";
         let next = b"GTACGTACGT"; // arbitrary; exact offset depends.
-        // Build a deterministic case instead:
+                                  // Build a deterministic case instead:
         let row_a = b"ACGTACGTAC";
         let row_b = b"GTACGTACAC"; // = row_a shifted by -2 (loose tail)
         let _ = (prev, next);
@@ -351,8 +351,8 @@ mod tests {
         // shift of it by exactly 7. Pass B should recover that shift.
         let width = 40usize;
         // Deterministic pseudo-random row using a fixed seed.
-        use rand::SeedableRng;
         use rand::Rng;
+        use rand::SeedableRng;
         use rand_chacha::ChaCha20Rng;
         let mut rng = ChaCha20Rng::seed_from_u64(99);
         let row_a: Vec<u8> = (0..width)
@@ -380,7 +380,9 @@ mod tests {
     #[test]
     fn recover_offset_zero_for_identical_windows() {
         let width = 30usize;
-        let row: Vec<u8> = (0..width).map(|i| if i % 2 == 0 { b'A' } else { b'C' }).collect();
+        let row: Vec<u8> = (0..width)
+            .map(|i| if i % 2 == 0 { b'A' } else { b'C' })
+            .collect();
         let win: Vec<u8> = (0..15).flat_map(|_| row.iter().copied()).collect();
         let offset = recover_offset(&win, &win, width);
         assert_eq!(offset, 0);

@@ -51,11 +51,7 @@ pub fn compute(
         return None;
     }
     let mean = block_ics.iter().sum::<f64>() / block_ics.len() as f64;
-    let var = block_ics
-        .iter()
-        .map(|x| (x - mean).powi(2))
-        .sum::<f64>()
-        / block_ics.len() as f64;
+    let var = block_ics.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / block_ics.len() as f64;
     let std = var.sqrt();
     if mean.abs() > 1e-6 {
         Some((std / mean).min(2.0))

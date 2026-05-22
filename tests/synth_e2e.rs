@@ -37,8 +37,18 @@ fn read_truth(prefix: &std::path::Path) -> (Vec<String>, Vec<String>) {
     p.push(".truth.tsv");
     let t = std::fs::read_to_string(std::path::PathBuf::from(p)).unwrap();
     let mut lines = t.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(str::to_string).collect();
-    let row: Vec<String> = lines.next().unwrap().split('\t').map(str::to_string).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(str::to_string)
+        .collect();
+    let row: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(str::to_string)
+        .collect();
     (header, row)
 }
 
@@ -87,7 +97,10 @@ structure:
     let idx_class = header.iter().position(|h| h == "truth_class").unwrap();
     let idx_base = header.iter().position(|h| h == "base_width_bp").unwrap();
     let idx_k = header.iter().position(|h| h == "hor_k").unwrap();
-    let idx_n = header.iter().position(|h| h == "n_complete_copies").unwrap();
+    let idx_n = header
+        .iter()
+        .position(|h| h == "n_complete_copies")
+        .unwrap();
     let idx_se = header
         .iter()
         .position(|h| h == "structural_expression")

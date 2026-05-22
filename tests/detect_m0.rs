@@ -12,7 +12,10 @@ fn synth_one(config_yaml: &str) -> tempfile::TempDir {
     use std::io::Write;
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join("cfg.yaml");
-    std::fs::File::create(&cfg).unwrap().write_all(config_yaml.as_bytes()).unwrap();
+    std::fs::File::create(&cfg)
+        .unwrap()
+        .write_all(config_yaml.as_bytes())
+        .unwrap();
     let prefix = dir.path().join("arr");
     let out = Command::new(kitehor_bin())
         .args(["synth"])
@@ -21,11 +24,19 @@ fn synth_one(config_yaml: &str) -> tempfile::TempDir {
         .arg(&prefix)
         .output()
         .expect("run synth");
-    assert!(out.status.success(), "synth failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "synth failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     dir
 }
 
-fn run_detect(fa: &std::path::Path, periods: &std::path::Path, out_prefix: &std::path::Path) -> std::process::Output {
+fn run_detect(
+    fa: &std::path::Path,
+    periods: &std::path::Path,
+    out_prefix: &std::path::Path,
+) -> std::process::Output {
     Command::new(kitehor_bin())
         .arg("detect")
         .arg(fa)
@@ -71,7 +82,12 @@ structure:
     p.push(".properties.tsv");
     let props = std::fs::read_to_string(std::path::PathBuf::from(p)).unwrap();
     let lines: Vec<&str> = props.lines().collect();
-    assert_eq!(lines.len(), 2, "expected header + 1 row, got {}", lines.len());
+    assert_eq!(
+        lines.len(),
+        2,
+        "expected header + 1 row, got {}",
+        lines.len()
+    );
     let header_cols = lines[0].split('\t').count();
     let row_cols = lines[1].split('\t').count();
     assert_eq!(header_cols, 20, "properties has 20 columns");
@@ -105,7 +121,10 @@ structure:
     p.push(".width_features.tsv");
     let wf = std::fs::read_to_string(std::path::PathBuf::from(p)).unwrap();
     let wf_lines: Vec<&str> = wf.lines().collect();
-    assert!(wf_lines.len() >= 2, "width_features should have header + ≥1 data row");
+    assert!(
+        wf_lines.len() >= 2,
+        "width_features should have header + ≥1 data row"
+    );
     assert_eq!(wf_lines[0].split('\t').count(), 17);
     let cols: Vec<&str> = wf_lines[1].split('\t').collect();
     assert_eq!(cols.len(), 17);
@@ -168,8 +187,13 @@ fn detect_batch_pairs_by_stem() {
         .arg(dir.path())
         .arg("--out-dir")
         .arg(&synth_out)
-        .output().unwrap();
-    assert!(out.status.success(), "synth-batch failed: {}", String::from_utf8_lossy(&out.stderr));
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "synth-batch failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // Now split fasta and periods into separate sibling dirs.
     let fa_dir = dir.path().join("fa");
@@ -196,8 +220,13 @@ fn detect_batch_pairs_by_stem() {
         .arg(&pe_dir)
         .arg("--out-dir")
         .arg(&det_out)
-        .output().unwrap();
-    assert!(out.status.success(), "detect-batch failed: {}", String::from_utf8_lossy(&out.stderr));
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "detect-batch failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // Each stem should produce three TSVs.
     for stem in ["a", "b"] {
@@ -219,20 +248,33 @@ fn detect_expectations_oracle_well_formed() {
     let mut lines = text.lines();
     let header = lines.next().unwrap();
     let cols: Vec<&str> = header.split('\t').collect();
-    assert_eq!(cols, [
-        "array_id", "expected_class", "expected_base_width_bp",
-        "expected_hor_k", "base_width_tol_bp", "expected_reason_contains",
-        "notes",
-    ]);
+    assert_eq!(
+        cols,
+        [
+            "array_id",
+            "expected_class",
+            "expected_base_width_bp",
+            "expected_hor_k",
+            "base_width_tol_bp",
+            "expected_reason_contains",
+            "notes",
+        ]
+    );
     let mut n = 0;
     for line in lines {
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
         let fields: Vec<&str> = line.split('\t').collect();
         assert_eq!(fields.len(), 7, "row `{}` has wrong column count", line);
-        assert!(matches!(
-            fields[1],
-            "simple_TR" | "HOR" | "irregular_HOR" | "mixed" | "ambiguous"
-        ), "bad class in row `{}`", line);
+        assert!(
+            matches!(
+                fields[1],
+                "simple_TR" | "HOR" | "irregular_HOR" | "mixed" | "ambiguous"
+            ),
+            "bad class in row `{}`",
+            line
+        );
         n += 1;
     }
     // 22 active fixtures (T09 is .deferred.yaml).

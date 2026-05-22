@@ -40,10 +40,7 @@ fn count_yaml(dir: &std::path::Path, deferred: bool) -> usize {
 fn corpus_has_23_active_and_1_deferred() {
     let active = count_yaml(&corpus_dir(), false);
     let deferred = count_yaml(&corpus_dir(), true);
-    assert_eq!(
-        active, 23,
-        "expected 23 active fixtures, found {active}"
-    );
+    assert_eq!(active, 23, "expected 23 active fixtures, found {active}");
     assert_eq!(
         deferred, 1,
         "expected 1 deferred placeholder, found {deferred}"
@@ -144,22 +141,31 @@ fn seed_offset_zero_respects_yaml_seeds() {
     std::fs::create_dir_all(&cfg_dir).unwrap();
     let yaml = b"schema_version: 1\nseed: 12345\ntemplates:\n  t:\n    type: HOR_slots\n    monomer_length_bp: 100\n    k: 4\n    inter_slot_divergence: 0.10\nstructure:\n  - type: HOR\n    template: t\n    n_copies: 20\n";
     let cfg_path = cfg_dir.join("case_only.yaml");
-    std::fs::File::create(&cfg_path).unwrap().write_all(yaml).unwrap();
+    std::fs::File::create(&cfg_path)
+        .unwrap()
+        .write_all(yaml)
+        .unwrap();
 
     // Direct synth run.
     let direct_out = dir.path().join("direct");
     let _ = Command::new(kitehor_bin())
-        .arg("synth").arg(&cfg_path)
-        .arg("-o").arg(direct_out.join("case_only"))
-        .output().unwrap();
+        .arg("synth")
+        .arg(&cfg_path)
+        .arg("-o")
+        .arg(direct_out.join("case_only"))
+        .output()
+        .unwrap();
 
     // Batch run with seed_offset=0 (default).
     let batch_out = dir.path().join("batch");
     let _ = Command::new(kitehor_bin())
         .arg("synth-batch")
-        .arg("--config-dir").arg(&cfg_dir)
-        .arg("--out-dir").arg(&batch_out)
-        .output().unwrap();
+        .arg("--config-dir")
+        .arg(&cfg_dir)
+        .arg("--out-dir")
+        .arg(&batch_out)
+        .output()
+        .unwrap();
 
     let s1 = std::fs::read(direct_out.join("case_only.fa")).unwrap();
     let s2 = std::fs::read(batch_out.join("case_only.fa")).unwrap();
@@ -176,17 +182,25 @@ fn seed_offset_nonzero_reshuffles() {
     let b = dir.path().join("b");
     let out_a = Command::new(kitehor_bin())
         .arg("synth-batch")
-        .arg("--config-dir").arg(corpus_dir())
-        .arg("--out-dir").arg(&a)
-        .arg("--seed-offset").arg("7")
-        .output().unwrap();
+        .arg("--config-dir")
+        .arg(corpus_dir())
+        .arg("--out-dir")
+        .arg(&a)
+        .arg("--seed-offset")
+        .arg("7")
+        .output()
+        .unwrap();
     assert!(out_a.status.success());
     let out_b = Command::new(kitehor_bin())
         .arg("synth-batch")
-        .arg("--config-dir").arg(corpus_dir())
-        .arg("--out-dir").arg(&b)
-        .arg("--seed-offset").arg("99")
-        .output().unwrap();
+        .arg("--config-dir")
+        .arg(corpus_dir())
+        .arg("--out-dir")
+        .arg(&b)
+        .arg("--seed-offset")
+        .arg("99")
+        .output()
+        .unwrap();
     assert!(out_b.status.success());
     // Pick one fixture and assert the sequences differ.
     let f1 = a.join("T05_hor_clean.fa");
@@ -213,8 +227,10 @@ fn coord_map_and_filler_spans_cover_post_pipeline_sequence_length() {
     let dir = tempfile::tempdir().unwrap();
     let _out = Command::new(kitehor_bin())
         .arg("synth-batch")
-        .arg("--config-dir").arg(corpus_dir())
-        .arg("--out-dir").arg(dir.path())
+        .arg("--config-dir")
+        .arg(corpus_dir())
+        .arg("--out-dir")
+        .arg(dir.path())
         .arg("--diagnostics")
         .output()
         .unwrap();
@@ -224,8 +240,7 @@ fn coord_map_and_filler_spans_cover_post_pipeline_sequence_length() {
         if !p.to_string_lossy().ends_with(".diagnostics.json") {
             continue;
         }
-        let j: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
 
         // Skip configs that contain DUPLICATION/DELETION/INVERSION
         // (uncovered-byte semantics differ).
@@ -277,7 +292,11 @@ fn diagnostics_emitted_when_flag_set() {
     let any = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(|e| e.ok())
-        .find(|e| e.file_name().to_string_lossy().ends_with(".diagnostics.json"))
+        .find(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .ends_with(".diagnostics.json")
+        })
         .unwrap()
         .path();
     let j: serde_json::Value = serde_json::from_slice(&std::fs::read(&any).unwrap()).unwrap();

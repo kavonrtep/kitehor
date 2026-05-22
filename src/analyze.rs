@@ -6,12 +6,13 @@
 //! contract — see `docs/new/rule_proto_impl_plan.md` §0).
 //!
 //! Stage map:
-//! 1. kite-periodicity → `<prefix>.kite.tsv` + `.kite.peaks.tsv`
-//! 2. rule-classify → `<prefix>.verdicts.tsv`
-//! 3a. subrepeat-scan → `<prefix>.subrepeat.tsv` + `.windows.tsv`
-//! 3b. ssr-scan → `<prefix>.ssr.tsv` + `.ssr.regions.tsv`
-//! 3c. hor-validate → `<prefix>.hor_within_tile.tsv`
-//! 4. summary-merge → `<prefix>.summary.tsv`
+//!
+//! - kite-periodicity → `<prefix>.kite.tsv` + `.kite.peaks.tsv`
+//! - rule-classify → `<prefix>.verdicts.tsv`
+//! - subrepeat-scan → `<prefix>.subrepeat.tsv` + `.windows.tsv`
+//! - ssr-scan → `<prefix>.ssr.tsv` + `.ssr.regions.tsv`
+//! - hor-validate → `<prefix>.hor_within_tile.tsv`
+//! - summary-merge → `<prefix>.summary.tsv`
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
@@ -19,7 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Aggregated config for the orchestrator.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Config {
     pub kite: crate::kite::KiteConfig,
     pub rule: crate::rule_classify::Config,
@@ -27,19 +28,6 @@ pub struct Config {
     pub ssr: crate::ssr::Config,
     pub hor_validate: crate::hor_validate::Config,
     pub summary: crate::summary::Config,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            kite: Default::default(),
-            rule: Default::default(),
-            subrepeat: Default::default(),
-            ssr: Default::default(),
-            hor_validate: Default::default(),
-            summary: Default::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

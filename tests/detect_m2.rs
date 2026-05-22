@@ -12,7 +12,10 @@ fn kitehor_bin() -> std::path::PathBuf {
 fn synth_then_detect(yaml: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join("cfg.yaml");
-    std::fs::File::create(&cfg).unwrap().write_all(yaml.as_bytes()).unwrap();
+    std::fs::File::create(&cfg)
+        .unwrap()
+        .write_all(yaml.as_bytes())
+        .unwrap();
     let synth = dir.path().join("arr");
     let o = Command::new(kitehor_bin())
         .args(["synth"])
@@ -43,7 +46,10 @@ fn read_widths(prefix: &std::path::Path) -> Vec<Vec<String>> {
     let mut p = prefix.as_os_str().to_owned();
     p.push(".width_features.tsv");
     let s = std::fs::read_to_string(std::path::PathBuf::from(p)).unwrap();
-    s.lines().skip(1).map(|l| l.split('\t').map(String::from).collect()).collect()
+    s.lines()
+        .skip(1)
+        .map(|l| l.split('\t').map(String::from).collect())
+        .collect()
 }
 
 #[test]
@@ -72,7 +78,10 @@ structure:
         .expect("width=171 missing from width_features");
     let best_lag: usize = r[6].parse().expect("best_lag not an int");
     let best_score: f64 = r[7].parse().expect("best_lag_score not f64");
-    assert_eq!(best_lag, 12, "best_lag at base width should be 12; row={r:?}");
+    assert_eq!(
+        best_lag, 12,
+        "best_lag at base width should be 12; row={r:?}"
+    );
     assert!(
         best_score > 0.6,
         "best_lag_score should be high at the true HOR multiplicity; got {best_score}"
@@ -109,7 +118,10 @@ structure:
     let best: f64 = r[7].parse().unwrap();
     // On a simple TR, R(1) is already very high; R(best_k) doesn't
     // exceed it by much.
-    assert!(r1 > 0.8, "simple TR base width R(1) should be high; got {r1}");
+    assert!(
+        r1 > 0.8,
+        "simple TR base width R(1) should be high; got {r1}"
+    );
     assert!(
         (best - r1).abs() < 0.20,
         "simple TR: best lag score should be close to R(1); r1={r1} best={best}"

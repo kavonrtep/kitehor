@@ -16,11 +16,7 @@ use crate::detect::config::DetectorConfig;
 use crate::detect::types::PeriodCandidate;
 use std::collections::BTreeSet;
 
-pub fn expand(
-    periods: &[PeriodCandidate],
-    cfg: &DetectorConfig,
-    array_len: usize,
-) -> Vec<usize> {
+pub fn expand(periods: &[PeriodCandidate], cfg: &DetectorConfig, array_len: usize) -> Vec<usize> {
     let mut sorted: Vec<&PeriodCandidate> = periods.iter().collect();
     sorted.sort_by(|a, b| {
         b.period_score
@@ -31,9 +27,7 @@ pub fn expand(
     let mut out: Vec<usize> = Vec::new();
     let mut seen: BTreeSet<usize> = BTreeSet::new();
 
-    let in_range = |w: usize| -> bool {
-        w >= cfg.min_width && w <= cfg.max_width && w < array_len
-    };
+    let in_range = |w: usize| -> bool { w >= cfg.min_width && w <= cfg.max_width && w < array_len };
     let push = |out: &mut Vec<usize>, seen: &mut BTreeSet<usize>, w: usize| {
         if in_range(w) && seen.insert(w) {
             out.push(w);
@@ -117,6 +111,7 @@ pub fn divisors(p: usize) -> Vec<usize> {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use crate::detect::types::PeriodCandidate;

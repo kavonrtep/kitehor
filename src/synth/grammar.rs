@@ -68,10 +68,7 @@ pub fn to_expression(cfg: &Config) -> String {
 
 fn render_block(cfg: &Config, b: &Block) -> Option<String> {
     match b {
-        Block::HOR {
-            template,
-            n_copies,
-        } => {
+        Block::HOR { template, n_copies } => {
             let (k, div) = template_k_div(cfg, template);
             let div_part = if div > 0.0 {
                 format!(",div={}", trim_float(div))
@@ -80,10 +77,7 @@ fn render_block(cfg: &Config, b: &Block) -> Option<String> {
             };
             Some(format!("H([M_1..M_{}],{}{})", k, n_copies, div_part))
         }
-        Block::SIMPLE_TR {
-            template,
-            n_copies,
-        } => {
+        Block::SIMPLE_TR { template, n_copies } => {
             let l = template_monomer_len(cfg, template);
             Some(format!("T(M({}),{})", l, n_copies))
         }

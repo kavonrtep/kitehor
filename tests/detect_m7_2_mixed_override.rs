@@ -112,10 +112,7 @@ fn t15_stratification_stays_simple_tr() {
 fn t05_clean_hor_stays_hor() {
     let (_dir, det) = synth_and_detect("T05_hor_clean");
     let class = class_of(&det);
-    assert_eq!(
-        class, "HOR",
-        "T05 (clean HOR) must stay HOR; got `{class}`"
-    );
+    assert_eq!(class, "HOR", "T05 (clean HOR) must stay HOR; got `{class}`");
 }
 
 #[test]
@@ -188,7 +185,10 @@ fn mixed_array_emits_per_segment_monomers_to_consensus_fa() {
     // whole-array .monomer (which doesn't exist for mixed).
     let (_dir, det) = synth_and_detect("T20_same_width_mixed_hor");
     let class = class_of(&det);
-    assert_eq!(class, "mixed", "T20 should be mixed for this assertion to apply");
+    assert_eq!(
+        class, "mixed",
+        "T20 should be mixed for this assertion to apply"
+    );
 
     let mut p = det.as_os_str().to_owned();
     p.push(".consensus.fa");

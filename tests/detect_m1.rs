@@ -13,14 +13,18 @@ fn kitehor_bin() -> std::path::PathBuf {
 fn synth_one(yaml: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join("cfg.yaml");
-    std::fs::File::create(&cfg).unwrap().write_all(yaml.as_bytes()).unwrap();
+    std::fs::File::create(&cfg)
+        .unwrap()
+        .write_all(yaml.as_bytes())
+        .unwrap();
     let prefix = dir.path().join("arr");
     let o = Command::new(kitehor_bin())
         .args(["synth"])
         .arg(&cfg)
         .arg("-o")
         .arg(&prefix)
-        .output().unwrap();
+        .output()
+        .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     (dir, prefix)
 }
@@ -69,7 +73,8 @@ structure:
         .arg(&periods)
         .arg("-o")
         .arg(&det_prefix)
-        .output().unwrap();
+        .output()
+        .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
 
     let rows = parse_width_features(&det_prefix);
@@ -136,7 +141,8 @@ structure:
         .arg(&periods)
         .arg("-o")
         .arg(&det_prefix)
-        .output().unwrap();
+        .output()
+        .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
 
     let rows = parse_width_features(&det_prefix);

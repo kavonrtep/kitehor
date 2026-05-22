@@ -34,7 +34,7 @@ pub fn extract_consensus_monomers(
     let n = seq_lower.len();
     for i in 0..=(n - period) {
         let kmer = &seq_lower[i..i + period];
-        if kmer.iter().any(|b| *b == b'n') {
+        if kmer.contains(&b'n') {
             continue;
         }
         *counts.entry(kmer.to_vec()).or_insert(0) += 1;

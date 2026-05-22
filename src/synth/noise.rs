@@ -68,8 +68,7 @@ pub fn apply(state: &mut SimState, global: &Global, rng: &mut ChaCha20Rng) -> No
     // insertion spans reported in truth/diagnostics reflect the
     // post-noise FASTA, not the pre-noise sequence.
     for fs in state.filler_spans.iter_mut() {
-        let (s, l) =
-            apply_indels_to_span(fs.realised_start_bp, fs.realised_len_bp, &log.indels);
+        let (s, l) = apply_indels_to_span(fs.realised_start_bp, fs.realised_len_bp, &log.indels);
         fs.realised_start_bp = s;
         fs.realised_len_bp = l;
     }
@@ -158,8 +157,16 @@ mod tests {
         let exp = n as f64 * 0.01;
         let ins_err = (log.n_insertions as f64 - exp).abs() / exp;
         let del_err = (log.n_deletions as f64 - exp).abs() / exp;
-        assert!(ins_err < 0.05, "insertions: exp ~{exp}, got {}", log.n_insertions);
-        assert!(del_err < 0.05, "deletions: exp ~{exp}, got {}", log.n_deletions);
+        assert!(
+            ins_err < 0.05,
+            "insertions: exp ~{exp}, got {}",
+            log.n_insertions
+        );
+        assert!(
+            del_err < 0.05,
+            "deletions: exp ~{exp}, got {}",
+            log.n_deletions
+        );
         // Length: n + insertions - deletions
         let expected_len = n + log.n_insertions - log.n_deletions;
         assert_eq!(s.sequence.len(), expected_len);
@@ -177,7 +184,10 @@ mod tests {
         let log = apply(&mut s, &g, &mut r);
         assert_eq!(log.n_substitutions, 10_000);
         for b in &s.sequence {
-            assert_ne!(*b, b'A', "every base must have been substituted away from 'A'");
+            assert_ne!(
+                *b, b'A',
+                "every base must have been substituted away from 'A'"
+            );
             assert!(matches!(*b, b'C' | b'G' | b'T'));
         }
     }
@@ -213,16 +223,31 @@ mod tests {
         let mut rt = s.templates();
         let inst = instantiate(&cfgs, &mut rt);
         let blocks = vec![
-            Block::HOR { template: "t".into(), n_copies: 50 },
+            Block::HOR {
+                template: "t".into(),
+                n_copies: 50,
+            },
             Block::SHIFT { offset_bp: 25 },
-            Block::HOR { template: "t".into(), n_copies: 50 },
+            Block::HOR {
+                template: "t".into(),
+                n_copies: 50,
+            },
         ];
         let mut rs = s.structure();
         let mut state = expand(&blocks, &inst, &mut rs).unwrap();
-        let shift_pre = state.filler_spans.iter().find(|f| matches!(f.kind, FillerKind::Shift {..})).unwrap().realised_start_bp;
+        let shift_pre = state
+            .filler_spans
+            .iter()
+            .find(|f| matches!(f.kind, FillerKind::Shift { .. }))
+            .unwrap()
+            .realised_start_bp;
 
         // Now apply a noise pass with non-trivial indel_rate.
-        let g = Global { mutation_rate: 0.0, indel_rate: 0.05, ..Default::default() };
+        let g = Global {
+            mutation_rate: 0.0,
+            indel_rate: 0.05,
+            ..Default::default()
+        };
         let mut rn = s.noise();
         let log = apply(&mut state, &g, &mut rn);
 
@@ -234,9 +259,17 @@ mod tests {
             .sum();
         // Must have at least one indel for the test to be meaningful.
         // With seed=42 and 20_000 bp pre-shift at 5% indel rate, expect ~1000.
-        assert!(net_indels_before_shift.abs() > 0, "test setup: noise produced no indels before shift");
+        assert!(
+            net_indels_before_shift.abs() > 0,
+            "test setup: noise produced no indels before shift"
+        );
 
-        let shift_post = state.filler_spans.iter().find(|f| matches!(f.kind, FillerKind::Shift {..})).unwrap().realised_start_bp;
+        let shift_post = state
+            .filler_spans
+            .iter()
+            .find(|f| matches!(f.kind, FillerKind::Shift { .. }))
+            .unwrap()
+            .realised_start_bp;
         let expected = (shift_pre as i64 + net_indels_before_shift) as usize;
         assert_eq!(
             shift_post, expected,
@@ -290,7 +323,12 @@ mod tests {
         // Sum of coord_map lens should equal the post-noise sequence
         // length, since every base of every entry is covered (blocks
         // are contiguous) and no out-of-block bytes exist yet.
-        let cm_total: usize = state.coord_map.entries.iter().map(|e| e.realised_len_bp).sum();
+        let cm_total: usize = state
+            .coord_map
+            .entries
+            .iter()
+            .map(|e| e.realised_len_bp)
+            .sum();
         assert_eq!(
             cm_total,
             state.sequence.len(),
@@ -302,6 +340,9 @@ mod tests {
         );
 
         // And expected length matches.
-        assert_eq!(state.sequence.len(), pre_len + log.n_insertions - log.n_deletions);
+        assert_eq!(
+            state.sequence.len(),
+            pre_len + log.n_insertions - log.n_deletions
+        );
     }
 }

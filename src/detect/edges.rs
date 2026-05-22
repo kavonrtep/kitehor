@@ -70,10 +70,7 @@ pub fn compute(seq: &[u8], width: usize, n_rows: usize) -> Option<EdgeFeatures> 
     } else {
         total_y as f64 / denom
     };
-    let column_edge_rate: Vec<f64> = col_edges
-        .iter()
-        .map(|&n| n as f64 / pairs as f64)
-        .collect();
+    let column_edge_rate: Vec<f64> = col_edges.iter().map(|&n| n as f64 / pairs as f64).collect();
 
     // Autocorrelation of column_edge_rate along c (Pearson-style),
     // searching k in 1..width/2 for the strongest non-trivial peak.
@@ -140,11 +137,7 @@ mod tests {
         let width = 4usize;
         let n_rows = 8usize;
         for r in 0..n_rows {
-            let bytes = if r % 2 == 0 {
-                b"ACAC"
-            } else {
-                b"CACA"
-            };
+            let bytes = if r % 2 == 0 { b"ACAC" } else { b"CACA" };
             seq.extend_from_slice(bytes);
         }
         let e = compute(&seq, width, n_rows).unwrap();
@@ -163,11 +156,7 @@ mod tests {
         for r in 0..n_rows {
             for c in 0..width {
                 // Columns 0, 4, 8, 12 flip every row; others stay 'A'.
-                let b = if c % 4 == 0 && r % 2 == 1 {
-                    b'C'
-                } else {
-                    b'A'
-                };
+                let b = if c % 4 == 0 && r % 2 == 1 { b'C' } else { b'A' };
                 seq.push(b);
             }
         }

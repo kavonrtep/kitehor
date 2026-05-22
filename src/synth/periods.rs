@@ -93,8 +93,8 @@ pub fn build(cfg: &Config, array_id: &str, rng: &mut ChaCha20Rng) -> Vec<PeriodC
     // Add a near-miss and harmonic for the **first** discovered base
     // width — that's the primary period for HOR detection purposes.
     if let Some(&base) = real.iter().next() {
-        let nm_offset = rng.random_range(2..=4) as i64
-            * (if rng.random::<f64>() < 0.5 { 1 } else { -1 });
+        let nm_offset =
+            rng.random_range(2..=4) as i64 * (if rng.random::<f64>() < 0.5 { 1 } else { -1 });
         let nm = (base as i64 + nm_offset).max(20) as usize;
         if !real.contains(&nm) {
             out.push(PeriodCandidate {
@@ -133,11 +133,7 @@ pub fn build(cfg: &Config, array_id: &str, rng: &mut ChaCha20Rng) -> Vec<PeriodC
     out
 }
 
-pub fn write(
-    prefix: &Path,
-    array_id: &str,
-    candidates: &[PeriodCandidate],
-) -> Result<()> {
+pub fn write(prefix: &Path, array_id: &str, candidates: &[PeriodCandidate]) -> Result<()> {
     let path = with_ext(prefix, "periods.tsv");
     let mut f = std::fs::File::create(&path).with_context(|| format!("creating {:?}", path))?;
     writeln!(f, "array_id\tperiod_bp\tperiod_score\tsource")?;

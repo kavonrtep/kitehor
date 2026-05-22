@@ -154,7 +154,7 @@ fn summarise_hits(hits: &[Hit], length_bp: usize, threshold_pct: f64) -> ScanOut
     let dom_pct = 100.0 * (dom_d.total_coverage_bp as f64) / (length_bp as f64);
     let total_pct = 100.0 * (total_cov_bp as f64) / (length_bp as f64);
     let mut sorted_top = by_motif.clone();
-    sorted_top.sort_by(|a, b| b.1.total_coverage_bp.cmp(&a.1.total_coverage_bp));
+    sorted_top.sort_by_key(|(_, d)| std::cmp::Reverse(d.total_coverage_bp));
     let top_str = sorted_top
         .iter()
         .take(3)
@@ -205,7 +205,7 @@ fn build_multimotif_summary(
     if rows.is_empty() {
         return empty_summary(0);
     }
-    rows.sort_by(|a, b| b.1.total_coverage_bp.cmp(&a.1.total_coverage_bp));
+    rows.sort_by_key(|(_, d)| std::cmp::Reverse(d.total_coverage_bp));
     let (dom_m, dom_d) = rows[0].clone();
     let total_cov_bp: u64 = rows.iter().map(|(_, d)| d.total_coverage_bp).sum();
     let dom_pct = 100.0 * (dom_d.total_coverage_bp as f64) / (length_bp as f64);

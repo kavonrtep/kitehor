@@ -253,13 +253,10 @@ pub fn load_and_validate(path: &Path) -> Result<Config, ConfigError> {
             path: path.to_owned(),
             source: e,
         })?;
-    let json_value: serde_json::Value =
-        serde_json::to_value(&yaml_value).map_err(|e| {
-            ConfigError::Invariant(format!("YAML→JSON conversion failed: {e}"))
-        })?;
-    let schema: serde_json::Value =
-        serde_json::from_str(crate::synth::CANONICAL_SCHEMA)
-            .expect("embedded simulator.schema.json must be valid JSON");
+    let json_value: serde_json::Value = serde_json::to_value(&yaml_value)
+        .map_err(|e| ConfigError::Invariant(format!("YAML→JSON conversion failed: {e}")))?;
+    let schema: serde_json::Value = serde_json::from_str(crate::synth::CANONICAL_SCHEMA)
+        .expect("embedded simulator.schema.json must be valid JSON");
     let validator = jsonschema::validator_for(&schema)
         .map_err(|e| ConfigError::Invariant(format!("schema compile failed: {e}")))?;
     let errors: Vec<String> = validator
@@ -346,9 +343,7 @@ fn validate_mvp_invariants(cfg: &Config) -> Result<(), ConfigError> {
     // block and that its copy range fits.
     for (i, ev) in cfg.post_generation.iter().enumerate() {
         let (block_idx, copy_start, copy_end) = match ev {
-            Event::HYBRID {
-                block, at_copy, ..
-            } => (*block, *at_copy, *at_copy),
+            Event::HYBRID { block, at_copy, .. } => (*block, *at_copy, *at_copy),
             Event::INVERSION {
                 block,
                 start_copy,
@@ -883,13 +878,7 @@ structure:
 
     #[test]
     fn insertion_kinds_parse() {
-        for kind in [
-            "random",
-            "AT_rich",
-            "GC_rich",
-            "retro_like",
-            "segdup_like",
-        ] {
+        for kind in ["random", "AT_rich", "GC_rich", "retro_like", "segdup_like"] {
             let yaml = format!(
                 r#"
 schema_version: 1
@@ -911,8 +900,7 @@ structure:
 "#
             );
             let f = write_tmp(&yaml);
-            load_and_validate(f.path())
-                .unwrap_or_else(|e| panic!("kind={kind} failed: {e}"));
+            load_and_validate(f.path()).unwrap_or_else(|e| panic!("kind={kind} failed: {e}"));
         }
     }
 }

@@ -82,18 +82,21 @@ pub fn build_blocks(
 ) -> Vec<AnalysisBlock> {
     if n_rows < cfg.min_segment_rows.max(2) {
         // Single block — too few rows to subdivide meaningfully.
-        return vec![AnalysisBlock { start_row: 0, end_row: n_rows }];
+        return vec![AnalysisBlock {
+            start_row: 0,
+            end_row: n_rows,
+        }];
     }
 
     // Target block size (rows), adaptive to keep ≤ max_segments_per_array.
     let target_rows = {
-        let div_up = (n_rows + cfg.max_segments_per_array - 1) / cfg.max_segments_per_array;
+        let div_up = n_rows.div_ceil(cfg.max_segments_per_array);
         cfg.min_segment_rows.max(div_up)
     };
     let target_rows = match unit_rows {
         Some(u) if u >= 1 => {
             // Snap target up to a multiple of u — at least one full unit.
-            let multiplier = (target_rows + u - 1) / u;
+            let multiplier = target_rows.div_ceil(u);
             (multiplier.max(1)) * u
         }
         _ => target_rows,
@@ -106,7 +109,10 @@ pub fn build_blocks(
         _ => n_rows,
     };
     if cap < cfg.min_segment_rows {
-        return vec![AnalysisBlock { start_row: 0, end_row: n_rows }];
+        return vec![AnalysisBlock {
+            start_row: 0,
+            end_row: n_rows,
+        }];
     }
 
     let mut bounds: Vec<usize> = Vec::new();
@@ -134,7 +140,10 @@ pub fn build_blocks(
     // into its successor (or predecessor if it's the last block).
     let mut blocks: Vec<AnalysisBlock> = bounds
         .windows(2)
-        .map(|w| AnalysisBlock { start_row: w[0], end_row: w[1] })
+        .map(|w| AnalysisBlock {
+            start_row: w[0],
+            end_row: w[1],
+        })
         .collect();
     let min_rows = cfg.min_segment_rows;
     let mut i = 0;
@@ -156,7 +165,10 @@ pub fn build_blocks(
         }
     }
     if blocks.is_empty() {
-        blocks.push(AnalysisBlock { start_row: 0, end_row: cap });
+        blocks.push(AnalysisBlock {
+            start_row: 0,
+            end_row: cap,
+        });
     }
     blocks
 }
@@ -270,17 +282,22 @@ pub fn pairwise_identity(
     cfg: &DetectorConfig,
 ) -> Vec<IdentityPair> {
     let mut pairs: Vec<IdentityPair> = Vec::new();
-    for i in 0..consensuses.len() {
-        let Some(ci) = &consensuses[i] else { continue };
-        for j in (i + 1)..consensuses.len() {
-            let Some(cj) = &consensuses[j] else { continue };
+    for (i, ci_opt) in consensuses.iter().enumerate() {
+        let Some(ci) = ci_opt else { continue };
+        for (j, cj_opt) in consensuses.iter().enumerate().skip(i + 1) {
+            let Some(cj) = cj_opt else { continue };
             let Some((identity, coverage)) = best_alignment_identity(ci, cj) else {
                 continue;
             };
             if coverage < cfg.min_identity_coverage {
                 continue;
             }
-            pairs.push(IdentityPair { i, j, identity, coverage });
+            pairs.push(IdentityPair {
+                i,
+                j,
+                identity,
+                coverage,
+            });
         }
     }
     pairs
@@ -335,7 +352,13 @@ mod tests {
         // Below min_segment_rows → no subdivision.
         let cfg = default_cfg();
         let blocks = build_blocks(10, None, &[], &cfg);
-        assert_eq!(blocks, vec![AnalysisBlock { start_row: 0, end_row: 10 }]);
+        assert_eq!(
+            blocks,
+            vec![AnalysisBlock {
+                start_row: 0,
+                end_row: 10
+            }]
+        );
     }
 
     #[test]
@@ -355,7 +378,11 @@ mod tests {
         );
         // Each block ≥ min_segment_rows.
         for b in &blocks {
-            assert!(b.n_rows() >= cfg.min_segment_rows, "block too small: {:?}", b);
+            assert!(
+                b.n_rows() >= cfg.min_segment_rows,
+                "block too small: {:?}",
+                b
+            );
         }
         // Spans the full array.
         assert_eq!(blocks.first().unwrap().start_row, 0);
@@ -386,7 +413,10 @@ mod tests {
         cfg.min_segment_rows = 20;
         let blocks = build_blocks(200, None, &[50], &cfg);
         let starts: Vec<usize> = blocks.iter().map(|b| b.start_row).collect();
-        assert!(starts.contains(&50), "phase-shift split at 50 missing: {starts:?}");
+        assert!(
+            starts.contains(&50),
+            "phase-shift split at 50 missing: {starts:?}"
+        );
     }
 
     #[test]
@@ -400,7 +430,11 @@ mod tests {
         let blocks = build_blocks(200, None, &[195], &cfg);
         // None of the surviving blocks should be < min_segment_rows.
         for b in &blocks {
-            assert!(b.n_rows() >= cfg.min_segment_rows, "tiny block survived: {:?}", b);
+            assert!(
+                b.n_rows() >= cfg.min_segment_rows,
+                "tiny block survived: {:?}",
+                b
+            );
         }
     }
 
@@ -454,7 +488,10 @@ mod tests {
         // n_heavy vs n_heavy2: coverage 1/10 = 0.1 → dropped.
         // n_heavy vs clean: coverage 1/10 → dropped.
         // (only fully-clean vs clean would survive, but we only have one clean)
-        assert!(pairs.is_empty(), "expected all pairs filtered; got {pairs:?}");
+        assert!(
+            pairs.is_empty(),
+            "expected all pairs filtered; got {pairs:?}"
+        );
     }
 
     #[test]
@@ -471,7 +508,11 @@ mod tests {
         // best_alignment_identity may find a circular shift with
         // equal or higher identity; the lower bound is 0.9.
         let ab = pairs.iter().find(|p| (p.i, p.j) == (0, 1)).unwrap();
-        assert!(ab.identity >= 0.9, "best-alignment identity should be ≥ 0.9; got {}", ab.identity);
+        assert!(
+            ab.identity >= 0.9,
+            "best-alignment identity should be ≥ 0.9; got {}",
+            ab.identity
+        );
     }
 
     // M7.2: best-alignment identity catches single-family shifted blocks.
@@ -489,7 +530,8 @@ mod tests {
         assert!(
             best_id > zero_id,
             "best-alignment {} should beat zero-shift {}",
-            best_id, zero_id
+            best_id,
+            zero_id
         );
         // The exact shift that aligns the two strings should hit 1.0.
         assert!((best_id - 1.0).abs() < 1e-9, "best identity = {best_id}");
@@ -501,7 +543,10 @@ mod tests {
         let a = b"AAAAAAAAAA";
         let b = b"TTTTTTTTTT";
         let (best_id, _) = best_alignment_identity(a, b).unwrap();
-        assert!(best_id < 0.1, "expected ~0 for unrelated strings; got {best_id}");
+        assert!(
+            best_id < 0.1,
+            "expected ~0 for unrelated strings; got {best_id}"
+        );
     }
 
     #[test]
@@ -513,9 +558,24 @@ mod tests {
         //       blk 2 = 0.50 + 0.55 = 1.05.
         // Medoid = blk 1.
         let pairs = vec![
-            IdentityPair { i: 0, j: 1, identity: 0.95, coverage: 1.0 },
-            IdentityPair { i: 0, j: 2, identity: 0.50, coverage: 1.0 },
-            IdentityPair { i: 1, j: 2, identity: 0.55, coverage: 1.0 },
+            IdentityPair {
+                i: 0,
+                j: 1,
+                identity: 0.95,
+                coverage: 1.0,
+            },
+            IdentityPair {
+                i: 0,
+                j: 2,
+                identity: 0.50,
+                coverage: 1.0,
+            },
+            IdentityPair {
+                i: 1,
+                j: 2,
+                identity: 0.55,
+                coverage: 1.0,
+            },
         ];
         assert_eq!(pick_medoid(3, &pairs), Some(1));
     }
@@ -524,9 +584,24 @@ mod tests {
     fn pick_medoid_ties_break_by_smallest_index() {
         // 3 blocks, all pairwise identical 0.9 — all sums equal.
         let pairs = vec![
-            IdentityPair { i: 0, j: 1, identity: 0.9, coverage: 1.0 },
-            IdentityPair { i: 0, j: 2, identity: 0.9, coverage: 1.0 },
-            IdentityPair { i: 1, j: 2, identity: 0.9, coverage: 1.0 },
+            IdentityPair {
+                i: 0,
+                j: 1,
+                identity: 0.9,
+                coverage: 1.0,
+            },
+            IdentityPair {
+                i: 0,
+                j: 2,
+                identity: 0.9,
+                coverage: 1.0,
+            },
+            IdentityPair {
+                i: 1,
+                j: 2,
+                identity: 0.9,
+                coverage: 1.0,
+            },
         ];
         assert_eq!(pick_medoid(3, &pairs), Some(0));
     }

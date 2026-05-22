@@ -101,6 +101,9 @@ mod tests {
         let s = Streams::new(7);
         let v1 = s.templates().next_u64();
         let v2 = s.templates().next_u64();
-        assert_eq!(v1, v2, "calling templates() twice must replay the same sequence");
+        assert_eq!(
+            v1, v2,
+            "calling templates() twice must replay the same sequence"
+        );
     }
 }

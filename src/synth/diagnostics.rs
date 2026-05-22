@@ -18,6 +18,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::path::Path;
 
+#[allow(clippy::too_many_arguments)]
 pub fn write(
     prefix: &Path,
     cfg_path: &Path,

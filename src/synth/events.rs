@@ -75,23 +75,36 @@ pub fn apply(
                 slot,
                 source_slots,
                 split_fraction,
-            } => apply_hybrid(state, *block, *at_copy, *slot, *source_slots, *split_fraction, cfg, templates)
-                .with_context_suffix(i)?,
+            } => apply_hybrid(
+                state,
+                *block,
+                *at_copy,
+                *slot,
+                *source_slots,
+                *split_fraction,
+                cfg,
+                templates,
+            )
+            .with_context_suffix(i)?,
             Event::INVERSION {
                 block,
                 start_copy,
                 length_copies,
-            } => apply_inversion(state, *block, *start_copy, *length_copies).with_context_suffix(i)?,
+            } => apply_inversion(state, *block, *start_copy, *length_copies)
+                .with_context_suffix(i)?,
             Event::DUPLICATION {
                 block,
                 start_copy,
                 length_copies,
-            } => apply_duplication(state, *block, *start_copy, *length_copies).with_context_suffix(i)?,
+            } => apply_duplication(state, *block, *start_copy, *length_copies)
+                .with_context_suffix(i)?,
             Event::DELETION {
                 block,
                 start_copy,
                 length_copies,
-            } => apply_deletion(state, *block, *start_copy, *length_copies).with_context_suffix(i)?,
+            } => {
+                apply_deletion(state, *block, *start_copy, *length_copies).with_context_suffix(i)?
+            }
         };
         out.push(log);
     }
@@ -107,6 +120,7 @@ impl<T> ContextSuffix<T> for Result<T> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_hybrid(
     state: &mut SimState,
     block: usize,
@@ -342,12 +356,7 @@ pub fn to_events_json(logs: &[EventLog]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::synth::{
-        blocks::expand,
-        config::{InsertionKind, Source, Template, WobbleSpec, WobbleRealisation},
-        rng::Streams,
-        templates::instantiate,
-    };
+    use crate::synth::{blocks::expand, rng::Streams, templates::instantiate};
     use std::io::Write;
 
     fn parse(yaml: &str) -> Config {
@@ -419,8 +428,8 @@ post_generation:
         // slot 3, next 50 of slot 4.
         let s_3 = &inst["t"].slots[2];
         let s_4 = &inst["t"].slots[3];
-        let actual = &state.sequence
-            [entry_before.realised_start_bp..entry_before.realised_start_bp + 100];
+        let actual =
+            &state.sequence[entry_before.realised_start_bp..entry_before.realised_start_bp + 100];
         assert_eq!(&actual[..50], &s_3[..50]);
         assert_eq!(&actual[50..], &s_4[50..]);
         // Event log
@@ -510,7 +519,7 @@ post_generation:
         let (mut state, inst) = build_state(&cfg);
         // Snapshot the bytes that will be inverted.
         let pre_seq = state.sequence.clone();
-        let start_bp = 1 * 4 * 100;
+        let start_bp = 4 * 100;
         let end_bp = 3 * 4 * 100;
         let pre_range: Vec<u8> = pre_seq[start_bp..end_bp].to_vec();
         let mut rng = Streams::new(1).events();
@@ -728,7 +737,8 @@ post_generation:
             assert!(
                 e <= state.sequence.len(),
                 "coord entry {:?} extends past sequence (len={})",
-                entry, state.sequence.len()
+                entry,
+                state.sequence.len()
             );
         }
     }

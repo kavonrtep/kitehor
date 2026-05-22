@@ -74,8 +74,14 @@ pub fn run_one(
         .unwrap_or_else(|| array_id_from_prefix(out_prefix));
 
     fasta::write(out_prefix, &array_id, &state.sequence)?;
-    let truth_row =
-        truth::build_truth(&cfg, &state, &array_id, &noise_log, &wobble_log, &event_logs);
+    let truth_row = truth::build_truth(
+        &cfg,
+        &state,
+        &array_id,
+        &noise_log,
+        &wobble_log,
+        &event_logs,
+    );
     truth::write(out_prefix, &truth_row)?;
 
     let mut rp = streams.structure(); // period candidates piggy-back on the structure stream

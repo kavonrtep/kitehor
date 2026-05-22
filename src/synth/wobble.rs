@@ -106,9 +106,9 @@ fn apply_one(
             for _ in 0..(3 * window) {
                 prev = rho * prev + normal.sample(rng);
             }
-            for r in 0..n_rows {
+            for slot in y.iter_mut().take(n_rows) {
                 prev = rho * prev + normal.sample(rng);
-                y[r] = prev;
+                *slot = prev;
             }
             y
         }
@@ -122,7 +122,11 @@ fn apply_one(
         let row_start = r * row_size;
         let row_end = (r + 1) * row_size;
         new_seq.extend_from_slice(&state.sequence[row_start..row_end]);
-        let target_change = if r == 0 { delta[0] } else { delta[r] - delta[r - 1] };
+        let target_change = if r == 0 {
+            delta[0]
+        } else {
+            delta[r] - delta[r - 1]
+        };
         residual += target_change;
         while residual >= 1.0 {
             // Insert a base at row_end (pre-wobble coord).
@@ -367,7 +371,12 @@ structure:
         };
         let mut rng = Streams::new(1).wobble();
         apply(&mut state, &[m], &cfg, &mut rng).unwrap();
-        let cm_total: usize = state.coord_map.entries.iter().map(|e| e.realised_len_bp).sum();
+        let cm_total: usize = state
+            .coord_map
+            .entries
+            .iter()
+            .map(|e| e.realised_len_bp)
+            .sum();
         assert_eq!(cm_total, state.sequence.len());
     }
 

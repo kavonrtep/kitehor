@@ -203,7 +203,7 @@ fn apply_density_or_skip(
     let founder = v.founder;
     let tile = v.tile;
     if let Some(k) = v.multiplicity {
-        if k <= cfg.min_k_for_density - 1 {
+        if k < cfg.min_k_for_density {
             row.founder_density = "NA".into();
             row.density_n_windows = 0;
             row.phase_contrast = "NA".into();

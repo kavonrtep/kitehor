@@ -466,8 +466,8 @@ fn block_column_ic(
             continue;
         }
         let mut col_ic = 0.0;
-        for i in 0..4 {
-            let p = counts[i] as f64 / n_acgt as f64;
+        for (i, &count) in counts.iter().enumerate() {
+            let p = count as f64 / n_acgt as f64;
             if p > 0.0 {
                 col_ic += p * (p / bg.q[i]).log2();
             }

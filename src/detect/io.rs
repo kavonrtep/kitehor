@@ -7,8 +7,8 @@
 //! - `write_*` emit the three frozen-at-M0 TSVs.
 
 use crate::detect::types::{
-    PeriodCandidate, Properties, Segment, WidthFeatures, PROPERTIES_HEADER,
-    SEGMENTS_HEADER, WIDTH_FEATURES_HEADER,
+    PeriodCandidate, Properties, Segment, WidthFeatures, PROPERTIES_HEADER, SEGMENTS_HEADER,
+    WIDTH_FEATURES_HEADER,
 };
 use crate::io::{load_fasta, LoadQc, LoadStatus, LoadedRecord};
 use crate::sequence::ArrayRecord;
@@ -28,8 +28,8 @@ pub fn load_arrays(path: &Path) -> Result<Vec<ArrayRecord>> {
         min_array_bp: 0,
         max_n_fraction: 1.0,
     };
-    let loaded: Vec<LoadedRecord> = load_fasta(path, qc)
-        .with_context(|| format!("loading FASTA {:?}", path))?;
+    let loaded: Vec<LoadedRecord> =
+        load_fasta(path, qc).with_context(|| format!("loading FASTA {:?}", path))?;
     let mut out = Vec::with_capacity(loaded.len());
     for r in loaded {
         match &r.status {
@@ -37,7 +37,8 @@ pub fn load_arrays(path: &Path) -> Result<Vec<ArrayRecord>> {
             _ => {
                 log::warn!(
                     "FASTA record {} flagged: {:?} — passing through",
-                    r.record.id, r.status
+                    r.record.id,
+                    r.status
                 );
                 out.push(r.record);
             }
@@ -78,11 +79,8 @@ pub fn load_periods(path: &Path) -> Result<HashMap<String, Vec<PeriodCandidate>>
             Some(i) => rec.get(i).unwrap_or("").trim().to_string(),
             None => String::new(),
         };
-        let period_bp: usize = rec
-            .get(i_period)
-            .unwrap_or("")
-            .parse()
-            .with_context(|| {
+        let period_bp: usize =
+            rec.get(i_period).unwrap_or("").parse().with_context(|| {
                 format!("row {} period_bp not an integer in {:?}", row_idx, path)
             })?;
         // Review-2026-05-16 #8: strict parse. A malformed period_score
@@ -91,10 +89,7 @@ pub fn load_periods(path: &Path) -> Result<HashMap<String, Vec<PeriodCandidate>>
         // Require finite and in [0, 1].
         let period_score_raw = rec.get(i_score).unwrap_or("").trim();
         if period_score_raw.is_empty() {
-            anyhow::bail!(
-                "row {} period_score is empty in {:?}",
-                row_idx, path
-            );
+            anyhow::bail!("row {} period_score is empty in {:?}", row_idx, path);
         }
         let period_score: f64 = period_score_raw.parse().with_context(|| {
             format!(
@@ -105,13 +100,17 @@ pub fn load_periods(path: &Path) -> Result<HashMap<String, Vec<PeriodCandidate>>
         if !period_score.is_finite() {
             anyhow::bail!(
                 "row {} period_score must be finite (got {}) in {:?}",
-                row_idx, period_score, path
+                row_idx,
+                period_score,
+                path
             );
         }
         if !(0.0..=1.0).contains(&period_score) {
             anyhow::bail!(
                 "row {} period_score must be in [0, 1] (got {}) in {:?}",
-                row_idx, period_score, path
+                row_idx,
+                period_score,
+                path
             );
         }
         let source = i_source
@@ -124,7 +123,10 @@ pub fn load_periods(path: &Path) -> Result<HashMap<String, Vec<PeriodCandidate>>
             Some(prev) if prev >= period_score => {
                 log::warn!(
                     "duplicate period row dropped: array={:?} period={} (score {} <= {})",
-                    array_id, period_bp, period_score, prev
+                    array_id,
+                    period_bp,
+                    period_score,
+                    prev
                 );
                 continue;
             }
@@ -138,12 +140,15 @@ pub fn load_periods(path: &Path) -> Result<HashMap<String, Vec<PeriodCandidate>>
             None => {}
         }
         dup_check.insert(key, period_score);
-        grouped.entry(array_id.clone()).or_default().push(PeriodCandidate {
-            array_id,
-            period_bp,
-            period_score,
-            source,
-        });
+        grouped
+            .entry(array_id.clone())
+            .or_default()
+            .push(PeriodCandidate {
+                array_id,
+                period_bp,
+                period_score,
+                source,
+            });
     }
     Ok(grouped)
 }
@@ -211,7 +216,8 @@ pub fn join_arrays_with_periods(
             anyhow::bail!(
                 "periods TSV contains {} array_id(s) with no matching FASTA record: {:?}; \
                  pass `--allow-extra-periods` to downgrade to a warning",
-                leftover.len(), leftover
+                leftover.len(),
+                leftover
             );
         }
     }
@@ -244,8 +250,7 @@ fn with_ext(prefix: &Path, ext: &str) -> PathBuf {
 pub fn write_properties(prefix: &Path, rows: &[Properties]) -> Result<()> {
     let path = properties_path(prefix);
     ensure_parent(&path)?;
-    let mut f = std::fs::File::create(&path)
-        .with_context(|| format!("creating {:?}", path))?;
+    let mut f = std::fs::File::create(&path).with_context(|| format!("creating {:?}", path))?;
     writeln!(f, "{}", PROPERTIES_HEADER)?;
     for r in rows {
         writeln!(f, "{}", properties_to_tsv(r))?;
@@ -256,8 +261,7 @@ pub fn write_properties(prefix: &Path, rows: &[Properties]) -> Result<()> {
 pub fn write_segments(prefix: &Path, rows: &[Segment]) -> Result<()> {
     let path = segments_path(prefix);
     ensure_parent(&path)?;
-    let mut f = std::fs::File::create(&path)
-        .with_context(|| format!("creating {:?}", path))?;
+    let mut f = std::fs::File::create(&path).with_context(|| format!("creating {:?}", path))?;
     writeln!(f, "{}", SEGMENTS_HEADER)?;
     for r in rows {
         writeln!(f, "{}", segment_to_tsv(r))?;
@@ -268,8 +272,7 @@ pub fn write_segments(prefix: &Path, rows: &[Segment]) -> Result<()> {
 pub fn write_width_features(prefix: &Path, rows: &[WidthFeatures]) -> Result<()> {
     let path = width_features_path(prefix);
     ensure_parent(&path)?;
-    let mut f = std::fs::File::create(&path)
-        .with_context(|| format!("creating {:?}", path))?;
+    let mut f = std::fs::File::create(&path).with_context(|| format!("creating {:?}", path))?;
     writeln!(f, "{}", WIDTH_FEATURES_HEADER)?;
     for r in rows {
         writeln!(f, "{}", width_features_to_tsv(r))?;
@@ -300,7 +303,10 @@ pub fn write_diagnostics(
     let mut segs_by_array: std::collections::HashMap<&str, Vec<&Segment>> =
         std::collections::HashMap::new();
     for s in segments {
-        segs_by_array.entry(s.array_id.as_str()).or_default().push(s);
+        segs_by_array
+            .entry(s.array_id.as_str())
+            .or_default()
+            .push(s);
     }
 
     let arrays: Vec<serde_json::Value> = properties
@@ -517,11 +523,10 @@ mod tests {
         assert_eq!(fields[1], "12345");
         assert_eq!(fields[2], "ambiguous");
         // base_width_bp..confidence are all NA
-        for i in 3..18 {
+        for (i, field) in fields.iter().enumerate().take(18).skip(3) {
             assert!(
-                fields[i] == "NA" || fields[i] == "0",
-                "field {i} expected NA/0, got `{}`",
-                fields[i]
+                *field == "NA" || *field == "0",
+                "field {i} expected NA/0, got `{field}`"
             );
         }
     }
@@ -530,12 +535,15 @@ mod tests {
     fn periods_loader_groups_by_array_id() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("periods.tsv");
-        std::fs::File::create(&p).unwrap().write_all(
-            b"array_id\tperiod_bp\tperiod_score\tsource\n\
+        std::fs::File::create(&p)
+            .unwrap()
+            .write_all(
+                b"array_id\tperiod_bp\tperiod_score\tsource\n\
               a1\t171\t0.94\ttrue_base\n\
               a1\t2052\t0.88\ttrue_hor_unit\n\
               a2\t170\t0.94\ttrue_base\n",
-        ).unwrap();
+            )
+            .unwrap();
         let m = load_periods(&p).unwrap();
         assert_eq!(m.get("a1").unwrap().len(), 2);
         assert_eq!(m.get("a2").unwrap().len(), 1);
@@ -545,11 +553,14 @@ mod tests {
     fn periods_loader_dedups_keeping_max_score() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("periods.tsv");
-        std::fs::File::create(&p).unwrap().write_all(
-            b"array_id\tperiod_bp\tperiod_score\tsource\n\
+        std::fs::File::create(&p)
+            .unwrap()
+            .write_all(
+                b"array_id\tperiod_bp\tperiod_score\tsource\n\
               a1\t171\t0.50\ttrue_base\n\
               a1\t171\t0.94\ttrue_base\n",
-        ).unwrap();
+            )
+            .unwrap();
         let m = load_periods(&p).unwrap();
         let v = m.get("a1").unwrap();
         assert_eq!(v.len(), 1);
@@ -560,10 +571,13 @@ mod tests {
     fn periods_loader_rejects_missing_required_column() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("bad.tsv");
-        std::fs::File::create(&p).unwrap().write_all(
-            b"array_id\tperiod_bp\n\
+        std::fs::File::create(&p)
+            .unwrap()
+            .write_all(
+                b"array_id\tperiod_bp\n\
               a1\t171\n",
-        ).unwrap();
+            )
+            .unwrap();
         assert!(load_periods(&p).is_err());
     }
 
@@ -572,10 +586,13 @@ mod tests {
     fn periods_loader_rejects_malformed_score() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("bad.tsv");
-        std::fs::File::create(&p).unwrap().write_all(
-            b"array_id\tperiod_bp\tperiod_score\n\
+        std::fs::File::create(&p)
+            .unwrap()
+            .write_all(
+                b"array_id\tperiod_bp\tperiod_score\n\
               a1\t171\tnot-a-number\n",
-        ).unwrap();
+            )
+            .unwrap();
         assert!(load_periods(&p).is_err());
     }
 
@@ -583,10 +600,13 @@ mod tests {
     fn periods_loader_rejects_out_of_range_score() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("bad.tsv");
-        std::fs::File::create(&p).unwrap().write_all(
-            b"array_id\tperiod_bp\tperiod_score\n\
+        std::fs::File::create(&p)
+            .unwrap()
+            .write_all(
+                b"array_id\tperiod_bp\tperiod_score\n\
               a1\t171\t1.5\n",
-        ).unwrap();
+            )
+            .unwrap();
         assert!(load_periods(&p).is_err());
     }
 
@@ -594,10 +614,13 @@ mod tests {
     fn periods_loader_rejects_negative_score() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("bad.tsv");
-        std::fs::File::create(&p).unwrap().write_all(
-            b"array_id\tperiod_bp\tperiod_score\n\
+        std::fs::File::create(&p)
+            .unwrap()
+            .write_all(
+                b"array_id\tperiod_bp\tperiod_score\n\
               a1\t171\t-0.1\n",
-        ).unwrap();
+            )
+            .unwrap();
         assert!(load_periods(&p).is_err());
     }
 
@@ -605,10 +628,13 @@ mod tests {
     fn periods_loader_rejects_nonfinite_score() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("bad.tsv");
-        std::fs::File::create(&p).unwrap().write_all(
-            b"array_id\tperiod_bp\tperiod_score\n\
+        std::fs::File::create(&p)
+            .unwrap()
+            .write_all(
+                b"array_id\tperiod_bp\tperiod_score\n\
               a1\t171\tNaN\n",
-        ).unwrap();
+            )
+            .unwrap();
         assert!(load_periods(&p).is_err());
     }
 
@@ -616,10 +642,13 @@ mod tests {
     fn periods_loader_rejects_empty_score() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("bad.tsv");
-        std::fs::File::create(&p).unwrap().write_all(
-            b"array_id\tperiod_bp\tperiod_score\n\
+        std::fs::File::create(&p)
+            .unwrap()
+            .write_all(
+                b"array_id\tperiod_bp\tperiod_score\n\
               a1\t171\t\n",
-        ).unwrap();
+            )
+            .unwrap();
         assert!(load_periods(&p).is_err());
     }
 

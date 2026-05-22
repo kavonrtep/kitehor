@@ -106,14 +106,19 @@ mod tests {
         let mut seq = Vec::new();
         for _ in 0..50 {
             for c in [b'A', b'C', b'G', b'T'] {
-                seq.extend(std::iter::repeat(c).take(100));
+                seq.extend(std::iter::repeat_n(c, 100));
             }
         }
         let cfg = DetectorConfig::default();
         let embs = embed_rows(&seq, 100, &cfg);
         assert_eq!(embs.len(), 200);
         let s = compute(&embs, 12);
-        assert_eq!(s.best_lag.unwrap(), 4, "best lag should be k=4; r_k={:?}", s.r_k);
+        assert_eq!(
+            s.best_lag.unwrap(),
+            4,
+            "best lag should be k=4; r_k={:?}",
+            s.r_k
+        );
         // R(4) should be ~1.0; R(1) < R(4) by a noticeable margin.
         assert!(s.r_k[3] > s.r_k[0] + 0.5);
     }

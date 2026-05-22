@@ -103,8 +103,8 @@ pub fn wrap_and_ic(
         }
         let denom = n_acgt as f64;
         let mut ic = 0.0;
-        for i in 0..4 {
-            let p = counts[i] as f64 / denom;
+        for (i, &count) in counts.iter().enumerate() {
+            let p = count as f64 / denom;
             if p > 0.0 {
                 let q = bg.q[i];
                 // q is guaranteed > 0 by Background::compute's fallback.
@@ -130,6 +130,7 @@ pub fn wrap_and_ic(
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use crate::detect::config::DetectorConfig;
@@ -216,9 +217,9 @@ mod tests {
     fn random_sequence_low_ic() {
         // Pseudo-random ACGT sequence — every column is roughly
         // uniform, so per-column IC should be near 0.
+        use rand::Rng;
         use rand::SeedableRng;
         use rand_chacha::ChaCha20Rng;
-        use rand::Rng;
         let mut rng = ChaCha20Rng::seed_from_u64(7);
         let n = 4000;
         let mut seq = Vec::with_capacity(n);

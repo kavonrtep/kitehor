@@ -89,6 +89,7 @@ pub fn dot(a: &RowEmbedding, b: &RowEmbedding) -> f64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 
@@ -124,7 +125,10 @@ mod tests {
     fn identical_rows_dot_to_one() {
         let a = embed_row(b"ACGTACGTACGTACGT", 4, 256);
         let d = dot(&a, &a);
-        assert!((d - 1.0).abs() < 1e-6, "identical rows must dot to 1.0; got {d}");
+        assert!(
+            (d - 1.0).abs() < 1e-6,
+            "identical rows must dot to 1.0; got {d}"
+        );
     }
 
     #[test]
@@ -163,6 +167,9 @@ mod tests {
         let a = embed_row(b"ACGTACGTACGTACGTACGTACGTACGTACGT", 4, 256);
         let b = embed_row(b"TGCATGCATGCATGCATGCATGCATGCATGCA", 4, 256);
         let s = dot(&a, &b);
-        assert!(s < 0.95, "expected distinct rows to similar < 0.95; got {s}");
+        assert!(
+            s < 0.95,
+            "expected distinct rows to similar < 0.95; got {s}"
+        );
     }
 }

@@ -291,15 +291,7 @@ mod tests {
     fn sequence_source_used_verbatim() {
         let mut rng = Streams::new(0).templates();
         let user_seq = "acgtacgtac";
-        let t = instantiate_hor_slots(
-            10,
-            3,
-            Source::Sequence,
-            Some(user_seq),
-            0.5,
-            0.0,
-            &mut rng,
-        );
+        let t = instantiate_hor_slots(10, 3, Source::Sequence, Some(user_seq), 0.5, 0.0, &mut rng);
         assert_eq!(t.slots[0], b"ACGTACGTAC".to_vec());
     }
 

@@ -118,10 +118,7 @@ fn split_mixed(props: &Properties, ctx: &MixedBlocksContext) -> Vec<Segment> {
     out
 }
 
-fn identity_to_reference(
-    block_idx: usize,
-    ctx: &MixedBlocksContext,
-) -> (Option<f64>, Option<f64>) {
+fn identity_to_reference(block_idx: usize, ctx: &MixedBlocksContext) -> (Option<f64>, Option<f64>) {
     if block_idx == ctx.reference_block {
         return (Some(1.0), Some(1.0));
     }
@@ -208,16 +205,44 @@ mod tests {
         p.class = Class::Mixed;
         let ctx = MixedBlocksContext {
             blocks: vec![
-                AnalysisBlock { start_row: 0,  end_row: 10 },
-                AnalysisBlock { start_row: 10, end_row: 20 },
-                AnalysisBlock { start_row: 20, end_row: 40 },
+                AnalysisBlock {
+                    start_row: 0,
+                    end_row: 10,
+                },
+                AnalysisBlock {
+                    start_row: 10,
+                    end_row: 20,
+                },
+                AnalysisBlock {
+                    start_row: 20,
+                    end_row: 40,
+                },
             ],
-            consensuses: vec![Some(b"A".to_vec()), Some(b"A".to_vec()), Some(b"T".to_vec())],
+            consensuses: vec![
+                Some(b"A".to_vec()),
+                Some(b"A".to_vec()),
+                Some(b"T".to_vec()),
+            ],
             // Block 0 ↔ 1: high identity; block 0/1 ↔ 2: low identity.
             pairs: vec![
-                IdentityPair { i: 0, j: 1, identity: 0.95, coverage: 1.0 },
-                IdentityPair { i: 0, j: 2, identity: 0.50, coverage: 1.0 },
-                IdentityPair { i: 1, j: 2, identity: 0.55, coverage: 1.0 },
+                IdentityPair {
+                    i: 0,
+                    j: 1,
+                    identity: 0.95,
+                    coverage: 1.0,
+                },
+                IdentityPair {
+                    i: 0,
+                    j: 2,
+                    identity: 0.50,
+                    coverage: 1.0,
+                },
+                IdentityPair {
+                    i: 1,
+                    j: 2,
+                    identity: 0.55,
+                    coverage: 1.0,
+                },
             ],
             reference_block: 0,
             comparison_width: 100,
@@ -250,14 +275,21 @@ mod tests {
         // path still wins. Verifies the mutex between the two paths.
         let p = props_with_shifts(1000, vec![400]);
         let ctx = MixedBlocksContext {
-            blocks: vec![AnalysisBlock { start_row: 0, end_row: 10 }],
+            blocks: vec![AnalysisBlock {
+                start_row: 0,
+                end_row: 10,
+            }],
             consensuses: vec![Some(b"A".to_vec())],
             pairs: vec![],
             reference_block: 0,
             comparison_width: 100,
         };
         let s = split(&p, Some(&ctx));
-        assert_eq!(s.len(), 2, "HOR path should still emit phase-shift segments");
+        assert_eq!(
+            s.len(),
+            2,
+            "HOR path should still emit phase-shift segments"
+        );
         assert_eq!(s[0].class, Class::HOR);
     }
 }

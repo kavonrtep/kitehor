@@ -190,8 +190,8 @@ fn smooth_runs(windows: &[(usize, usize, String)], min_run: usize) -> Vec<(usize
                 runs[k + 1].2.clone()
             }
         };
-        for idx in i..j {
-            out[idx].2 = new_cls.clone();
+        for slot in out.iter_mut().take(j).skip(i) {
+            slot.2 = new_cls.clone();
         }
     }
     out

@@ -14,7 +14,10 @@ fn kitehor_bin() -> std::path::PathBuf {
 fn synth_then_detect(yaml: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join("cfg.yaml");
-    std::fs::File::create(&cfg).unwrap().write_all(yaml.as_bytes()).unwrap();
+    std::fs::File::create(&cfg)
+        .unwrap()
+        .write_all(yaml.as_bytes())
+        .unwrap();
     let synth = dir.path().join("arr");
     let o = Command::new(kitehor_bin())
         .args(["synth"])
@@ -90,10 +93,7 @@ structure:
     );
     let offsets_str = &row[14];
     assert_ne!(offsets_str, "NA", "phase_shift_offsets should not be NA");
-    let offsets: Vec<i64> = offsets_str
-        .split(',')
-        .map(|s| s.parse().unwrap())
-        .collect();
+    let offsets: Vec<i64> = offsets_str.split(',').map(|s| s.parse().unwrap()).collect();
     // Truth: shift offset = 85 bp. Pass B reports ±85 (sign depends on
     // which direction we declare "forward"). Allow either sign and
     // ±5 bp tolerance per plan §10 M3.5 acceptance.

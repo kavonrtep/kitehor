@@ -16,7 +16,8 @@ use std::io::Write;
 use std::path::Path;
 
 /// Header of `truth.tsv`. Exposed so tests can assert against it.
-pub const TRUTH_HEADER: &str = "array_id\tlength_bp\ttruth_class\tbase_width_bp\thor_k\thor_length_bp\
+pub const TRUTH_HEADER: &str =
+    "array_id\tlength_bp\ttruth_class\tbase_width_bp\thor_k\thor_length_bp\
 \tn_complete_copies\twobble_amplitude_bp\twobble_periodicity_bp\
 \tn_phase_shifts\tphase_shift_positions\tphase_shift_offsets\
 \tn_segments\treason\tstructural_expression\tschema_version\tevents_json";
@@ -66,8 +67,10 @@ impl TruthRow {
         let na = "NA";
         let fmt_opt_usize =
             |o: &Option<usize>| o.map(|x| x.to_string()).unwrap_or_else(|| na.to_string());
-        let fmt_opt_f64 =
-            |o: &Option<f64>| o.map(|x| format!("{:.4}", x)).unwrap_or_else(|| na.to_string());
+        let fmt_opt_f64 = |o: &Option<f64>| {
+            o.map(|x| format!("{:.4}", x))
+                .unwrap_or_else(|| na.to_string())
+        };
         let fmt_list_usize = |v: &[usize]| {
             if v.is_empty() {
                 na.to_string()
@@ -180,10 +183,8 @@ fn classify(cfg: &Config) -> (TruthClass, usize, Option<usize>, usize, String) {
         return (TruthClass::Random, 0, None, 0, "no repeat blocks".into());
     }
 
-    let descriptions: Vec<(usize, Option<usize>, usize)> = repeats
-        .iter()
-        .map(|b| describe_repeat(cfg, b))
-        .collect();
+    let descriptions: Vec<(usize, Option<usize>, usize)> =
+        repeats.iter().map(|b| describe_repeat(cfg, b)).collect();
     let first = descriptions[0];
     let mismatch = descriptions
         .iter()
@@ -216,10 +217,7 @@ fn classify(cfg: &Config) -> (TruthClass, usize, Option<usize>, usize, String) {
 /// Returns (base_width_bp, Option<hor_k>, n_copies).
 fn describe_repeat(cfg: &Config, b: &Block) -> (usize, Option<usize>, usize) {
     match b {
-        Block::HOR {
-            template,
-            n_copies,
-        } => {
+        Block::HOR { template, n_copies } => {
             let (l, k, div) = match cfg.templates.get(template) {
                 Some(Template::HOR_slots {
                     monomer_length_bp,
@@ -236,10 +234,7 @@ fn describe_repeat(cfg: &Config, b: &Block) -> (usize, Option<usize>, usize) {
                 (l, Some(k), *n_copies)
             }
         }
-        Block::SIMPLE_TR {
-            template,
-            n_copies,
-        } => {
+        Block::SIMPLE_TR { template, n_copies } => {
             let l = match cfg.templates.get(template) {
                 Some(Template::HOR_slots {
                     monomer_length_bp, ..
@@ -301,7 +296,14 @@ structure:
 "#,
         );
         let st = full_state(&cfg);
-        let row = build_truth(&cfg, &st, "arr1", &NoiseLog::default(), &WobbleLog::default(), &[]);
+        let row = build_truth(
+            &cfg,
+            &st,
+            "arr1",
+            &NoiseLog::default(),
+            &WobbleLog::default(),
+            &[],
+        );
         assert_eq!(row.truth_class, TruthClass::HOR);
         assert_eq!(row.base_width_bp, 171);
         assert_eq!(row.hor_k, Some(12));
@@ -327,7 +329,14 @@ structure:
 "#,
         );
         let st = full_state(&cfg);
-        let row = build_truth(&cfg, &st, "arr1", &NoiseLog::default(), &WobbleLog::default(), &[]);
+        let row = build_truth(
+            &cfg,
+            &st,
+            "arr1",
+            &NoiseLog::default(),
+            &WobbleLog::default(),
+            &[],
+        );
         assert_eq!(row.truth_class, TruthClass::SimpleTR);
         assert_eq!(row.base_width_bp, 170);
         assert!(row.hor_k.is_none());
@@ -352,7 +361,14 @@ structure:
 "#,
         );
         let st = full_state(&cfg);
-        let row = build_truth(&cfg, &st, "arr1", &NoiseLog::default(), &WobbleLog::default(), &[]);
+        let row = build_truth(
+            &cfg,
+            &st,
+            "arr1",
+            &NoiseLog::default(),
+            &WobbleLog::default(),
+            &[],
+        );
         assert_eq!(row.truth_class, TruthClass::SimpleTR);
         assert!(row.hor_k.is_none());
         // Total copies = 50 * k = 200 monomers.
@@ -382,7 +398,14 @@ structure:
 "#,
         );
         let st = full_state(&cfg);
-        let row = build_truth(&cfg, &st, "arr1", &NoiseLog::default(), &WobbleLog::default(), &[]);
+        let row = build_truth(
+            &cfg,
+            &st,
+            "arr1",
+            &NoiseLog::default(),
+            &WobbleLog::default(),
+            &[],
+        );
         assert_eq!(row.truth_class, TruthClass::HOR);
         assert_eq!(row.n_phase_shifts, 1);
         assert_eq!(row.phase_shift_offsets, vec![25]);
@@ -416,7 +439,14 @@ structure:
 "#,
         );
         let st = full_state(&cfg);
-        let row = build_truth(&cfg, &st, "arr1", &NoiseLog::default(), &WobbleLog::default(), &[]);
+        let row = build_truth(
+            &cfg,
+            &st,
+            "arr1",
+            &NoiseLog::default(),
+            &WobbleLog::default(),
+            &[],
+        );
         assert_eq!(row.truth_class, TruthClass::Mixed);
     }
 
@@ -438,7 +468,14 @@ structure:
 "#,
         );
         let st = full_state(&cfg);
-        let row = build_truth(&cfg, &st, "arr_test", &NoiseLog::default(), &WobbleLog::default(), &[]);
+        let row = build_truth(
+            &cfg,
+            &st,
+            "arr_test",
+            &NoiseLog::default(),
+            &WobbleLog::default(),
+            &[],
+        );
         let line = row.to_tsv();
         let fields: Vec<&str> = line.split('\t').collect();
         let header_fields: Vec<&str> = TRUTH_HEADER.split('\t').collect();

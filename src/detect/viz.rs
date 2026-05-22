@@ -83,8 +83,7 @@ pub fn export(flags: &VizFlags, bundle: &VizBundle<'_>) -> Result<()> {
         return Ok(());
     };
     let dir = root.join(bundle.array_id);
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("creating viz dir {:?}", dir))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating viz dir {:?}", dir))?;
 
     // Review-2026-05-16 #9: each granular flag gates exactly one
     // (or one bundle of) artefact. `--viz-dir` alone (no granular
@@ -96,7 +95,11 @@ pub fn export(flags: &VizFlags, bundle: &VizBundle<'_>) -> Result<()> {
 
     if emit_ic {
         if let Some(ic) = bundle.column_ic {
-            write_one_d_tsv(&dir.join(format!("column_ic_w{}.tsv", bundle.width_bp)), ic, "ic")?;
+            write_one_d_tsv(
+                &dir.join(format!("column_ic_w{}.tsv", bundle.width_bp)),
+                ic,
+                "ic",
+            )?;
         }
     }
     if emit_edges {
@@ -125,10 +128,7 @@ pub fn export(flags: &VizFlags, bundle: &VizBundle<'_>) -> Result<()> {
             write_one_d_tsv(&dir.join(format!("rk_w{}.tsv", bundle.width_bp)), r, "r_k")?;
         }
         if let Some(s) = bundle.best_shift {
-            write_shift_tsv(
-                &dir.join(format!("shift_w{}.tsv", bundle.width_bp)),
-                s,
-            )?;
+            write_shift_tsv(&dir.join(format!("shift_w{}.tsv", bundle.width_bp)), s)?;
         }
     }
 
@@ -154,7 +154,12 @@ pub fn export(flags: &VizFlags, bundle: &VizBundle<'_>) -> Result<()> {
 /// `n_rows < 2`.
 fn write_edge_matrix_tsv(path: &Path, seq: &[u8], width: usize, n_rows: usize) -> Result<()> {
     let mut f = File::create(path).with_context(|| format!("creating {:?}", path))?;
-    write!(f, "# array width_bp={} n_pairs={} schema_version=1\npair", width, n_rows - 1)?;
+    write!(
+        f,
+        "# array width_bp={} n_pairs={} schema_version=1\npair",
+        width,
+        n_rows - 1
+    )?;
     for c in 0..width {
         write!(f, "\tcol_{}", c)?;
     }
@@ -195,7 +200,11 @@ fn write_shift_tsv(path: &Path, xs: &[i32]) -> Result<()> {
 /// analysis without parsing FASTA.
 pub fn write_raster_tsv(path: &Path, seq: &[u8], width: usize, n_rows: usize) -> Result<()> {
     let mut f = File::create(path).with_context(|| format!("creating {:?}", path))?;
-    write!(f, "# array width_bp={} n_rows={} schema_version=1\nrow", width, n_rows)?;
+    write!(
+        f,
+        "# array width_bp={} n_rows={} schema_version=1\nrow",
+        width, n_rows
+    )?;
     for c in 0..width {
         write!(f, "\tcol_{}", c)?;
     }
@@ -239,8 +248,8 @@ fn write_raster_png(path: &Path, seq: &[u8], width: usize, n_rows: usize) -> Res
 
     // Vertical downsample if more than 4096 rows so PNGs stay sane.
     const ROW_CAP: usize = 4096;
-    let stride = (n_rows + ROW_CAP - 1) / ROW_CAP;
-    let img_rows = (n_rows + stride - 1) / stride;
+    let stride = n_rows.div_ceil(ROW_CAP);
+    let img_rows = n_rows.div_ceil(stride);
     let img_w = u32::try_from(width).context("width too large for PNG")?;
     let img_h = u32::try_from(img_rows).context("img_rows too large for PNG")?;
     let mut buf: Vec<u8> = Vec::with_capacity(width * img_rows * 3);
@@ -361,14 +370,8 @@ mod tests {
             !base.join("column_edge_rate_w8.tsv").exists(),
             "edge_rate was NOT flagged; should be absent under granular mode"
         );
-        assert!(
-            !base.join("rk_w8.tsv").exists(),
-            "rk was NOT flagged"
-        );
-        assert!(
-            !base.join("shift_w8.tsv").exists(),
-            "shift was NOT flagged"
-        );
+        assert!(!base.join("rk_w8.tsv").exists(), "rk was NOT flagged");
+        assert!(!base.join("shift_w8.tsv").exists(), "shift was NOT flagged");
     }
 
     #[test]

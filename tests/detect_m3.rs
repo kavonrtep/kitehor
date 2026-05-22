@@ -10,7 +10,10 @@ fn kitehor_bin() -> std::path::PathBuf {
 fn synth_then_detect(yaml: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join("cfg.yaml");
-    std::fs::File::create(&cfg).unwrap().write_all(yaml.as_bytes()).unwrap();
+    std::fs::File::create(&cfg)
+        .unwrap()
+        .write_all(yaml.as_bytes())
+        .unwrap();
     let synth = dir.path().join("arr");
     let o = Command::new(kitehor_bin())
         .args(["synth"])
@@ -41,7 +44,10 @@ fn read_widths(prefix: &std::path::Path) -> Vec<Vec<String>> {
     let mut p = prefix.as_os_str().to_owned();
     p.push(".width_features.tsv");
     let s = std::fs::read_to_string(std::path::PathBuf::from(p)).unwrap();
-    s.lines().skip(1).map(|l| l.split('\t').map(String::from).collect()).collect()
+    s.lines()
+        .skip(1)
+        .map(|l| l.split('\t').map(String::from).collect())
+        .collect()
 }
 
 #[test]
@@ -61,7 +67,10 @@ structure:
 "#,
     );
     let rows = read_widths(&det);
-    let r = rows.iter().find(|r| r[1] == "170").expect("width=170 missing");
+    let r = rows
+        .iter()
+        .find(|r| r[1] == "170")
+        .expect("width=170 missing");
     let wobble: f64 = r[13].parse().unwrap();
     assert!(
         wobble < 1.5,
@@ -93,7 +102,10 @@ structure:
 "#,
     );
     let rows = read_widths(&det);
-    let r = rows.iter().find(|r| r[1] == "171").expect("width=171 missing");
+    let r = rows
+        .iter()
+        .find(|r| r[1] == "171")
+        .expect("width=171 missing");
     let n_phase_shifts: usize = r[14].parse().unwrap();
     assert!(
         n_phase_shifts >= 1,
@@ -124,7 +136,10 @@ structure:
 "#,
     );
     let rows = read_widths(&det);
-    let r_base = rows.iter().find(|r| r[1] == "171").expect("width=171 missing");
+    let r_base = rows
+        .iter()
+        .find(|r| r[1] == "171")
+        .expect("width=171 missing");
     let v_base: f64 = r_base[9].parse().unwrap();
     assert!(
         v_base > 0.10,

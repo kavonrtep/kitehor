@@ -109,18 +109,17 @@ pub fn write_fasta(out_prefix: &Path, records: &[ConsensusRecord]) -> Result<()>
     let mut f = std::fs::File::create(&path).with_context(|| format!("creating {:?}", path))?;
     for r in records {
         match r {
-            ConsensusRecord::Resolved { array_id, monomer, hor_unit, hor_k } => {
+            ConsensusRecord::Resolved {
+                array_id,
+                monomer,
+                hor_unit,
+                hor_k,
+            } => {
                 writeln!(f, ">{}.monomer  length={}", array_id, monomer.len())?;
                 write_wrapped(&mut f, monomer)?;
                 if let Some(unit) = hor_unit {
                     let k = hor_k.unwrap_or(0);
-                    writeln!(
-                        f,
-                        ">{}.hor_unit  length={}  k={}",
-                        array_id,
-                        unit.len(),
-                        k
-                    )?;
+                    writeln!(f, ">{}.hor_unit  length={}  k={}", array_id, unit.len(), k)?;
                     write_wrapped(&mut f, unit)?;
                 }
             }
@@ -129,7 +128,9 @@ pub fn write_fasta(out_prefix: &Path, records: &[ConsensusRecord]) -> Result<()>
                     writeln!(
                         f,
                         ">{}_seg{}_monomer  length={}",
-                        array_id, seg_id, seg_consensus.len()
+                        array_id,
+                        seg_id,
+                        seg_consensus.len()
                     )?;
                     write_wrapped(&mut f, seg_consensus)?;
                 }
@@ -290,10 +291,7 @@ mod tests {
         let prefix = dir.path().join("t");
         let rec = ConsensusRecord::MixedSegments {
             array_id: "mx1".into(),
-            segments: vec![
-                (1, b"AAAA".to_vec()),
-                (2, b"TTTT".to_vec()),
-            ],
+            segments: vec![(1, b"AAAA".to_vec()), (2, b"TTTT".to_vec())],
         };
         write_fasta(&prefix, std::slice::from_ref(&rec)).unwrap();
         let text = std::fs::read_to_string(consensus_path(&prefix)).unwrap();

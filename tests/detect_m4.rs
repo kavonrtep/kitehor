@@ -22,6 +22,7 @@ fn corpus_dir() -> PathBuf {
 
 #[derive(Debug, Clone)]
 struct Expectation {
+    #[allow(dead_code)]
     array_id: String,
     expected_class: String,
     expected_base_width_bp: Option<usize>,
@@ -68,7 +69,11 @@ fn load_expectations() -> HashMap<String, Expectation> {
 }
 
 fn synth_and_detect(corpus_yaml: &Path) -> (tempfile::TempDir, PathBuf) {
-    let stem = corpus_yaml.file_stem().unwrap().to_string_lossy().to_string();
+    let stem = corpus_yaml
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
     let dir = tempfile::tempdir().unwrap();
     let synth = dir.path().join(&stem);
     let o = Command::new(kitehor_bin())
@@ -78,7 +83,11 @@ fn synth_and_detect(corpus_yaml: &Path) -> (tempfile::TempDir, PathBuf) {
         .arg(&synth)
         .output()
         .unwrap();
-    assert!(o.status.success(), "synth failed for {stem}: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(
+        o.status.success(),
+        "synth failed for {stem}: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
     let mut periods = synth.as_os_str().to_owned();
     periods.push(".periods.tsv");
     let det = dir.path().join("det");
@@ -93,7 +102,11 @@ fn synth_and_detect(corpus_yaml: &Path) -> (tempfile::TempDir, PathBuf) {
         .arg("--allow-missing-periods")
         .output()
         .unwrap();
-    assert!(o.status.success(), "detect failed for {stem}: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(
+        o.status.success(),
+        "detect failed for {stem}: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
     (dir, det)
 }
 
@@ -101,7 +114,12 @@ fn read_properties_row(det: &Path) -> Vec<String> {
     let mut p = det.as_os_str().to_owned();
     p.push(".properties.tsv");
     let s = std::fs::read_to_string(PathBuf::from(p)).unwrap();
-    s.lines().nth(1).unwrap().split('\t').map(String::from).collect()
+    s.lines()
+        .nth(1)
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect()
 }
 
 fn check_fixture(stem: &str, exps: &HashMap<String, Expectation>) {
@@ -130,7 +148,10 @@ fn check_fixture(stem: &str, exps: &HashMap<String, Expectation>) {
         assert!(
             got.abs_diff(expected_bw) <= exp.base_width_tol_bp,
             "{stem}: expected base_width={} (±{}) got {}; reason={}",
-            expected_bw, exp.base_width_tol_bp, got, reason
+            expected_bw,
+            exp.base_width_tol_bp,
+            got,
+            reason
         );
     }
 
@@ -153,7 +174,8 @@ fn check_fixture(stem: &str, exps: &HashMap<String, Expectation>) {
         assert!(
             reason.contains(&exp.expected_reason_contains),
             "{stem}: expected reason to contain {:?}; got {:?}",
-            exp.expected_reason_contains, reason
+            exp.expected_reason_contains,
+            reason
         );
     }
 }

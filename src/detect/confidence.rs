@@ -118,7 +118,10 @@ mod tests {
         let cfg = DetectorConfig::default();
         let p = make(Class::HOR, 1.5, 0.30, 200);
         let c = compute(&p, &cfg);
-        assert!(c > 0.85, "expected confidence > 0.85 for clean HOR; got {c}");
+        assert!(
+            c > 0.85,
+            "expected confidence > 0.85 for clean HOR; got {c}"
+        );
     }
 
     #[test]
@@ -126,7 +129,10 @@ mod tests {
         let cfg = DetectorConfig::default();
         let p = make(Class::SimpleTR, 1.8, 0.0, 1000);
         let c = compute(&p, &cfg);
-        assert!(c > 0.85, "expected confidence > 0.85 for clean simple TR; got {c}");
+        assert!(
+            c > 0.85,
+            "expected confidence > 0.85 for clean simple TR; got {c}"
+        );
     }
 
     #[test]
