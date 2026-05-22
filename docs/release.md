@@ -63,7 +63,22 @@ GitHub → Actions → Release → "Run workflow" → enter `v0.9.X`.
 
 ## Local pre-flight
 
-Before cutting a tag, mirror the CI checks locally:
+The repo ships tracked git hooks under [`.githooks/`](../.githooks/)
+that mirror the CI gates. **One-time install per clone**:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+After that:
+
+- **`pre-commit`** runs `cargo fmt --check` + `cargo clippy -- -D warnings`
+  on every commit that touches `.rs` / `.toml` / `.lock`. ~5 s
+  incremental. Bypass with `git commit --no-verify`.
+- **`pre-push`** runs `cargo test --release --locked` on every push.
+  Bypass with `git push --no-verify`.
+
+The same gates also runnable manually:
 
 ```bash
 cargo fmt --all --check
@@ -71,8 +86,9 @@ cargo clippy --release --all-targets --locked --no-deps -- -D warnings
 cargo test --release --locked
 ```
 
-All tests use small datasets shipped in `test_data/` or `tools/rule_proto/fixtures/`
-— no external downloads, no large-corpus dependencies.
+All tests use small datasets shipped in `test_data/` or
+`tools/rule_proto/fixtures/` — no external downloads, no
+large-corpus dependencies.
 
 ## Conda recipe
 

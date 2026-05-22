@@ -18,7 +18,16 @@ Requires Rust ≥ 1.85.
 cargo build --release
 ```
 
-Binary lands at `target/release/kitehor`.
+Binary lands at `target/release/kitehor`. Contributors should also
+install the tracked git hooks so commits/pushes can't ship
+fmt / clippy / test regressions:
+
+```bash
+git config core.hooksPath .githooks    # one-time per clone
+```
+
+See [`docs/release.md`](docs/release.md) for the full release
+runbook.
 
 ## Quick start
 

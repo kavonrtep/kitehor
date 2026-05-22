@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Pre-push: run the full test suite before any push reaches the remote.
+# Slower than the pre-commit gates (~10–30s incremental), so it only
+# fires once per push instead of once per commit.
+#
+# Activated by `git config core.hooksPath .githooks` (same one-line
+# install as the pre-commit hook).
+#
+# Bypass: `git push --no-verify`.
+
+set -euo pipefail
+
+echo "==> pre-push: cargo test --release --locked"
+cargo test --release --locked
+
+echo "==> pre-push: tests passed"

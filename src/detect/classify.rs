@@ -69,9 +69,11 @@ pub fn decide_array(
 
     // No width clears even the rescue floor → array has no
     // detectable repeat structure.
-    let any_supported = width_features
-        .iter()
-        .any(|w| w.column_ic.map(|ic| ic >= cfg.ic_threshold_rescue).unwrap_or(false));
+    let any_supported = width_features.iter().any(|w| {
+        w.column_ic
+            .map(|ic| ic >= cfg.ic_threshold_rescue)
+            .unwrap_or(false)
+    });
     if !any_supported {
         return ambiguous("no width achieves ic_threshold_rescue");
     }
@@ -82,10 +84,8 @@ pub fn decide_array(
     // as a ranking prior — higher-score widths get evaluated first
     // so their candidates appear first in the priority order, but
     // every supported width is considered.
-    let period_score: HashMap<usize, f64> = pers
-        .iter()
-        .map(|p| (p.period_bp, p.period_score))
-        .collect();
+    let period_score: HashMap<usize, f64> =
+        pers.iter().map(|p| (p.period_bp, p.period_score)).collect();
     let mut ordered_widths: Vec<&WidthFeatures> = width_features
         .iter()
         .filter(|w| w.rows >= cfg.min_rows_per_width)
@@ -170,8 +170,7 @@ pub fn decide_array(
             // Regime C: HOR collapsed — base period not statistically
             // valid (low R(1) OR low base IC), but the HOR-unit width
             // is a strong simple_TR. Either trigger qualifies.
-            let regime_c =
-                (!r1_ok || !base_ic_ok) && unit_ic >= cfg.ic_threshold_simple_tr;
+            let regime_c = (!r1_ok || !base_ic_ok) && unit_ic >= cfg.ic_threshold_simple_tr;
             if regime_c {
                 simple_calls_raw.push(Candidate {
                     class: Class::SimpleTR,
@@ -215,10 +214,9 @@ pub fn decide_array(
         // `input_score >= 0.85` so low-score distractor periods
         // (near_miss=0.71, harmonic=0.65, false_positive=0.42)
         // can't trigger the rescue.
-        let rescue =
-            input_score >= cfg.strong_period_score
-                && r1 >= cfg.simple_tr_r1_rescue
-                && ic >= cfg.ic_threshold_rescue;
+        let rescue = input_score >= cfg.strong_period_score
+            && r1 >= cfg.simple_tr_r1_rescue
+            && ic >= cfg.ic_threshold_rescue;
         if (canonical || rescue) && phase_sep < cfg.phase_separation_threshold {
             // Regime-A tag: uniformly high R(k) curve (R(1) ≈ R(best_lag))
             // suggests a collapsed HOR (div ≈ 0). The data is genuinely
@@ -288,8 +286,7 @@ pub fn decide_array(
         .iter()
         .filter(|h| {
             simple_calls.iter().any(|s| {
-                s.input_score > h.input_score
-                    && gcd(h.base_width_bp, s.base_width_bp) >= 20
+                s.input_score > h.input_score && gcd(h.base_width_bp, s.base_width_bp) >= 20
             })
         })
         .map(|h| h.base_width_bp)
@@ -303,9 +300,9 @@ pub fn decide_array(
     // and the harmonics 2·171, 3·171 are all absorbed into the HOR
     // call rather than producing spurious mixed-class artefacts).
     simple_calls.retain(|c| {
-        !hor_calls.iter().any(|h| {
-            h.base_width_bp > 0 && c.base_width_bp % h.base_width_bp == 0
-        })
+        !hor_calls
+            .iter()
+            .any(|h| h.base_width_bp > 0 && c.base_width_bp % h.base_width_bp == 0)
     });
     // Regime-C cleanup: a regime-C simple_TR at HOR-unit width
     // suppresses every plain simple_TR whose width is a multiple of
@@ -327,9 +324,9 @@ pub fn decide_array(
 
     if hor_calls.len() >= 2 {
         let first = &hor_calls[0];
-        let any_diff = hor_calls.iter().any(|c| {
-            c.base_width_bp != first.base_width_bp || c.hor_k != first.hor_k
-        });
+        let any_diff = hor_calls
+            .iter()
+            .any(|c| c.base_width_bp != first.base_width_bp || c.hor_k != first.hor_k);
         if any_diff {
             return mixed_decision(
                 hor_calls.iter().map(|c| c.n_complete_copies).sum::<usize>(),
@@ -344,16 +341,17 @@ pub fn decide_array(
             .any(|c| c.base_width_bp != first.base_width_bp);
         if any_diff {
             return mixed_decision(
-                simple_calls.iter().map(|c| c.n_complete_copies).sum::<usize>(),
+                simple_calls
+                    .iter()
+                    .map(|c| c.n_complete_copies)
+                    .sum::<usize>(),
                 "mixed — multiple simple_TR candidates with distinct base widths",
             );
         }
     }
     if !hor_calls.is_empty() && !simple_calls.is_empty() {
         let hor_base = hor_calls[0].base_width_bp;
-        let any_simple_diff = simple_calls
-            .iter()
-            .any(|c| c.base_width_bp != hor_base);
+        let any_simple_diff = simple_calls.iter().any(|c| c.base_width_bp != hor_base);
         if any_simple_diff {
             return mixed_decision(
                 None,
@@ -564,12 +562,7 @@ fn gcd(mut a: usize, mut b: usize) -> usize {
     a
 }
 
-fn recompute_ic(
-    seq: &[u8],
-    width: usize,
-    bg: &wrap::Background,
-    cfg: &DetectorConfig,
-) -> f64 {
+fn recompute_ic(seq: &[u8], width: usize, bg: &wrap::Background, cfg: &DetectorConfig) -> f64 {
     wrap::wrap_and_ic(seq, width, bg, cfg)
         .map(|s| s.mean_column_ic)
         .unwrap_or(0.0)

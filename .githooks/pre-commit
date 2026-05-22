@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Pre-commit: run the fast CI gates locally so we don't ship broken
+# style/lints. Mirrors the two CI checks that previously slipped through
+# (`cargo fmt --check` and `cargo clippy -- -D warnings`).
+#
+# To activate (once per clone):
+#   git config core.hooksPath .githooks
+#
+# To bypass occasionally (use sparingly):
+#   git commit --no-verify
+#
+# Tests are NOT run here — they're too slow for every commit. Use
+# `.githooks/pre-push` or run `cargo test --release` manually.
+
+set -euo pipefail
+
+# Only act on commits that touch Rust sources. Avoids spinning up cargo
+# for a docs-only or yaml-only commit.
+staged_rust=$(git diff --cached --name-only --diff-filter=ACMR \
+              | grep -E '\.(rs|toml|lock)$' || true)
+if [ -z "$staged_rust" ]; then
+    exit 0
+fi
+
+echo "==> pre-commit: cargo fmt --all --check"
+cargo fmt --all --check
+
+echo "==> pre-commit: cargo clippy --all-targets --locked --no-deps -- -D warnings"
+cargo clippy --all-targets --locked --no-deps -- -D warnings
+
+echo "==> pre-commit: gates passed"

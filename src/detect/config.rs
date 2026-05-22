@@ -103,12 +103,12 @@ pub struct DetectorConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct ConfidenceWeights {
     pub alpha: f64,   // phase_separation
-    pub beta:  f64,   // R(best_k) − R(unrelated_k)
+    pub beta: f64,    // R(best_k) − R(unrelated_k)
     pub gamma: f64,   // log10(n_complete_copies + 1)
     pub delta: f64,   // mean_column_IC
     pub epsilon: f64, // irregularity_score
     pub zeta: f64,    // wobble_amplitude / w
-    pub eta: f64,    // |mean_shift| / w
+    pub eta: f64,     // |mean_shift| / w
 }
 
 impl Default for ConfidenceWeights {
@@ -239,10 +239,7 @@ impl DetectorConfig {
             );
         }
         if self.min_segment_rows < 2 {
-            anyhow::bail!(
-                "min_segment_rows ({}) must be >= 2",
-                self.min_segment_rows
-            );
+            anyhow::bail!("min_segment_rows ({}) must be >= 2", self.min_segment_rows);
         }
         if !(0.0..=1.0).contains(&self.min_identity_coverage) {
             anyhow::bail!(
@@ -263,8 +260,8 @@ impl DetectorConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading detector config {:?}", path))?;
-        let cfg: DetectorConfig = toml::from_str(&text)
-            .with_context(|| format!("parsing detector config {:?}", path))?;
+        let cfg: DetectorConfig =
+            toml::from_str(&text).with_context(|| format!("parsing detector config {:?}", path))?;
         cfg.validate()?;
         Ok(cfg)
     }
