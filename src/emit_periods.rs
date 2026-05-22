@@ -33,7 +33,7 @@
 //! gates on `period_score`, not `source`.
 
 use crate::kite::KiteResult;
-use crate::rule::RuleVerdict;
+use crate::rule_classify::LegacyVerdict as RuleVerdict;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::io::Write;

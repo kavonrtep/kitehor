@@ -33,16 +33,22 @@ pub use types::{
     PROPERTIES_HEADER, SEGMENTS_HEADER, WIDTH_FEATURES_HEADER,
 };
 
+use crate::emit_periods::{build_rows, PeriodsRow};
+use crate::io::{load_fasta, LoadQc, LoadStatus, LoadedRecord};
+use crate::kite::{analyze as kite_analyze, KiteConfig, KiteResult};
+use crate::rule_classify::{
+    classify as rule_classify, Config as RuleConfig, LegacyVerdict as RuleVerdict,
+};
 use crate::sequence::ArrayRecord;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::Path;
 
 /// End-to-end pipeline for a single FASTA + period-TSV pair.
 ///
-/// M0 behaviour: produces `properties.tsv` with one
-/// `Properties::placeholder` row per FASTA record. `segments.tsv` and
-/// `width_features.tsv` are header-only. No detection logic yet —
-/// that arrives in M1+.
+/// Loads arrays and periods from disk, joins them, and delegates to
+/// [`run_inner`]. For an in-memory variant (used by auto-periods mode)
+/// see [`run_one_auto`].
 pub fn run_one(
     fasta: &Path,
     periods: &Path,
@@ -66,7 +72,18 @@ pub fn run_one(
         allow_missing_periods,
         allow_extra_periods,
     )?;
+    run_inner(paired, out_prefix, cfg, viz_flags)
+}
 
+/// Shared pipeline body for both `run_one` (file-based periods) and
+/// `run_one_auto` (in-memory kite-derived periods). Takes already-joined
+/// `(ArrayRecord, periods)` pairs and writes the full output bundle.
+fn run_inner(
+    paired: Vec<(ArrayRecord, Vec<PeriodCandidate>)>,
+    out_prefix: &Path,
+    cfg: &DetectorConfig,
+    viz_flags: &VizFlags,
+) -> Result<DetectorReport> {
     let mut properties: Vec<Properties> = Vec::with_capacity(paired.len());
     let mut segments: Vec<Segment> = Vec::new();
     let mut width_features: Vec<WidthFeatures> = Vec::new();
@@ -141,6 +158,135 @@ pub fn run_one(
         n_segments: segments.len(),
         n_width_rows: width_features.len(),
     })
+}
+
+/// Auto-periods entry point: run `kite-periodicity` (with defaults) and
+/// the rule classifier internally to derive a v2 periods set, then run
+/// the detector pipeline on it. The derived periods are also persisted
+/// to `<out_prefix>.periods.tsv` for reproducibility.
+///
+/// QC: uses [`LoadQc::default`] (kite defaults: `min_array_bp = 5_000`,
+/// `max_n_fraction = 0.20`). Records that fail QC are passed through to
+/// the detector with no period rows and end up classified as
+/// `ambiguous` (equivalent to `--allow-missing-periods`).
+pub fn run_one_auto(
+    fasta: &Path,
+    out_prefix: &Path,
+    cfg: &DetectorConfig,
+    viz_flags: &VizFlags,
+) -> Result<DetectorReport> {
+    cfg.validate()?;
+    let loaded = load_fasta(fasta, LoadQc::default())
+        .with_context(|| format!("loading FASTA {:?}", fasta))?;
+    let periods_by_id = auto_periods(&loaded);
+
+    // Persist the derived periods alongside the rest of the bundle, in
+    // the same format the explicit `kite-periodicity --emit-periods`
+    // path would produce. Matches the on-disk schema so downstream
+    // tools can read this output bundle as if it came from the
+    // two-step pipeline.
+    let periods_path = sibling_path(out_prefix, "periods.tsv");
+    let batches = batches_for_persist(&loaded, &periods_by_id);
+    crate::emit_periods::write_tsv(&periods_path, &batches)
+        .with_context(|| format!("writing derived periods {:?}", periods_path))?;
+
+    let default_stem = fasta
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string());
+    let arrays: Vec<ArrayRecord> = loaded.into_iter().map(|lr| lr.record).collect();
+    let paired = io::join_arrays_with_periods(
+        arrays,
+        periods_by_id,
+        default_stem.as_deref(),
+        /*allow_missing=*/ true,
+        /*allow_extra=*/ true,
+    )?;
+    run_inner(paired, out_prefix, cfg, viz_flags)
+}
+
+/// Build the in-memory equivalent of `kite-periodicity --classify
+/// --emit-periods`: parallel kite analysis + rule classification +
+/// score mapping per `emit_periods::build_rows`. Returns a map keyed by
+/// `array_id`. Records whose `LoadStatus` is not `Ok` contribute no
+/// entries; the detector tags those as `ambiguous` downstream.
+fn auto_periods(loaded: &[LoadedRecord]) -> HashMap<String, Vec<PeriodCandidate>> {
+    use rayon::prelude::*;
+
+    let kite_cfg = KiteConfig::default();
+    let rule_cfg = RuleConfig::default();
+
+    let ok_records: Vec<&ArrayRecord> = loaded
+        .iter()
+        .filter_map(|lr| matches!(lr.status, LoadStatus::Ok).then_some(&lr.record))
+        .collect();
+    let kite_results: Vec<KiteResult> = ok_records
+        .par_iter()
+        .map(|rec| kite_analyze(rec, &kite_cfg, /*dump_profile=*/ false))
+        .collect();
+    let verdicts: Vec<RuleVerdict> = kite_results
+        .iter()
+        .map(|kr| RuleVerdict::from_verdict(&rule_classify(kr, &rule_cfg)))
+        .collect();
+
+    let mut by_id: HashMap<String, Vec<PeriodCandidate>> = HashMap::new();
+    for (kr, verdict) in kite_results.iter().zip(verdicts.iter()) {
+        let rows = build_rows(kr, Some(verdict));
+        if rows.is_empty() {
+            continue;
+        }
+        let candidates: Vec<PeriodCandidate> = rows
+            .into_iter()
+            .map(|r| PeriodCandidate {
+                array_id: r.array_id,
+                period_bp: r.period_bp,
+                period_score: r.period_score,
+                source: r.source,
+            })
+            .collect();
+        by_id.insert(kr.array_id.clone(), candidates);
+    }
+    by_id
+}
+
+/// Rebuild the `Vec<Vec<PeriodsRow>>` shape `emit_periods::write_tsv`
+/// expects, in input FASTA order. Used only for the side-effect TSV
+/// emitted by `run_one_auto`; the detector itself consumes the
+/// HashMap. Records absent from the map (QC-rejected, NoSignal) emit
+/// an empty inner Vec so the file order matches the FASTA exactly.
+fn batches_for_persist(
+    loaded: &[LoadedRecord],
+    by_id: &HashMap<String, Vec<PeriodCandidate>>,
+) -> Vec<Vec<PeriodsRow>> {
+    loaded
+        .iter()
+        .map(|lr| {
+            by_id
+                .get(&lr.record.id)
+                .map(|cs| {
+                    cs.iter()
+                        .map(|c| PeriodsRow {
+                            array_id: c.array_id.clone(),
+                            period_bp: c.period_bp,
+                            period_score: c.period_score,
+                            source: c.source.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Build a sibling file path next to `out_prefix` with the given dotted
+/// extension, e.g. `(/tmp/foo, "periods.tsv") -> /tmp/foo.periods.tsv`.
+/// Matches the naming convention used by the detector's own bundle
+/// writers (`io::write_properties`, etc.).
+fn sibling_path(out_prefix: &Path, ext: &str) -> std::path::PathBuf {
+    let mut p = out_prefix.as_os_str().to_owned();
+    p.push(".");
+    p.push(ext);
+    std::path::PathBuf::from(p)
 }
 
 fn emit_viz(
@@ -785,6 +931,47 @@ pub fn run_batch(
         .map(|_| ())
     })?;
     Ok(n)
+}
+
+/// Batch over a directory of FASTAs without a paired periods directory.
+/// Each `<fasta_dir>/<stem>.fa` is processed via [`run_one_auto`] —
+/// kite + rule run internally to derive periods, which are then
+/// persisted alongside the detector outputs as
+/// `<out_dir>/<stem>.periods.tsv`.
+pub fn run_batch_auto(
+    fasta_dir: &Path,
+    out_dir: &Path,
+    cfg: &DetectorConfig,
+    viz_flags: &VizFlags,
+) -> Result<usize> {
+    use rayon::prelude::*;
+    std::fs::create_dir_all(out_dir)?;
+    let fastas = discover_fastas(fasta_dir)?;
+    let n = fastas.len();
+    fastas.par_iter().try_for_each(|(fa, stem)| -> Result<()> {
+        let prefix = out_dir.join(stem);
+        run_one_auto(fa, &prefix, cfg, viz_flags).map(|_| ())
+    })?;
+    Ok(n)
+}
+
+fn discover_fastas(fasta_dir: &Path) -> Result<Vec<(std::path::PathBuf, String)>> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(fasta_dir)? {
+        let e = entry?;
+        let p = e.path();
+        if p.extension().and_then(|x| x.to_str()) != Some("fa") {
+            continue;
+        }
+        let stem = p
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| anyhow::anyhow!("non-utf8 stem in {:?}", p))?
+            .to_string();
+        out.push((p, stem));
+    }
+    out.sort();
+    Ok(out)
 }
 
 fn discover_pairs(

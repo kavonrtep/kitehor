@@ -2,12 +2,11 @@
 //! synthetic fixture under `test_data/smoke/` and verify the verdicts.
 //!
 //! The fixture has 3 records:
-//!   - `tandem_pure` (60 bp × 300 copies)        → tandem
+//!   - `tandem_pure` (60 bp × 300 copies)        → simple_tr
 //!   - `hor_k3`      (100 bp founder, k=3)       → hor, founder=100, tile=300
 //!   - `hor_k5`      (150 bp founder, k=5)       → hor, founder=150, tile=750
 //!
-//! If this test breaks, either the model artefacts in `models/` were
-//! changed, or the kite/feature/classifier code drifted.
+//! Uses the rule classifier (port of `tools/rule_proto/rule_proto.py`).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -62,7 +61,6 @@ fn smoke_classifier_verdicts_match_truth() {
             "-o",
             tmp.to_str().unwrap(),
             "--classify",
-            "--no-hor-call",
             "--threads",
             "2",
         ])
@@ -78,7 +76,7 @@ fn smoke_classifier_verdicts_match_truth() {
         rows.iter().map(|r| (r["case_id"].clone(), r)).collect();
 
     let tandem = by_id.get("tandem_pure").expect("tandem_pure missing");
-    assert_eq!(tandem["verdict"], "tandem", "tandem_pure verdict mismatch");
+    assert_eq!(tandem["verdict"], "simple_tr", "tandem_pure verdict mismatch");
 
     let hor3 = by_id.get("hor_k3").expect("hor_k3 missing");
     assert_eq!(hor3["verdict"], "hor", "hor_k3 verdict");

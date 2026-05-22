@@ -51,6 +51,32 @@ pub enum Command {
     /// Run `detect` over every `<stem>.fa` in a directory paired with
     /// `<stem>.periods.tsv` (parallel).
     DetectBatch(DetectBatchArgs),
+    /// Rule-based HOR/simple_tr/unresolved classifier (port of
+    /// `tools/rule_proto/rule_proto.py`). Reads a kite peaks
+    /// long-format TSV and emits `<prefix>.verdicts.tsv` with one row
+    /// per record.
+    RuleClassify(RuleClassifyArgs),
+    /// Outer-join rule-classify verdicts + subrepeat-scan + ssr-scan
+    /// (optionally + hor-validate) into a single summary TSV with
+    /// `combined_class`. Port of `tools/rule_proto/summary.py`.
+    SummaryMerge(SummaryMergeArgs),
+    /// Short-motif tandem repeat (SSR) scanner. Port of
+    /// `tools/rule_proto/ssr_scan.py`. Emits `<prefix>.ssr.tsv` and
+    /// `<prefix>.ssr.regions.tsv`.
+    SsrScan(SsrScanArgs),
+    /// Spatial alternation scanner for nested-TR detection (port of
+    /// `tools/rule_proto/subrepeat_scan.py`). Emits
+    /// `<prefix>.subrepeat.tsv` and `<prefix>.windows.tsv`.
+    SubrepeatScan(SubrepeatScanArgs),
+    /// Within-tile + spatial density HOR validator (port of
+    /// `tools/rule_proto/hor_within_tile_check.py`). Emits
+    /// `<prefix>.hor_within_tile.tsv`.
+    HorValidate(HorValidateArgs),
+    /// End-to-end pipeline. Runs kite-periodicity → rule-classify →
+    /// (subrepeat-scan ‖ ssr-scan ‖ hor-validate) → summary-merge on
+    /// one FASTA. Always emits every per-stage TSV under
+    /// `<prefix>.*.tsv`.
+    Analyze(AnalyzeArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -129,110 +155,15 @@ pub struct KitePeriodicityArgs {
     /// tile → 0.90, other top-3 peaks → 0.60; ambiguous verdicts
     /// (`Unresolved`) emit top-3 at 0.50 / 0.40 / 0.30. Without
     /// `--classify`, raw kite top-3 peaks emit at 0.60. NoSignal
-    /// produces no rows; records rejected by kite QC also leave
-    /// no rows — use `kitehor detect --allow-missing-periods` in
-    /// either case to keep those records in the detector output
-    /// (they end up as `ambiguous`).
-    ///
-    /// Mutually exclusive with `--use-ml-classifier` — the ML
-    /// path's `founder` / `tile` aren't surfaced through this
-    /// emitter, so silently emitting low-score raw peaks would
-    /// be misleading. Use the default rule-based `--classify`
-    /// instead.
-    #[arg(long, value_name = "PATH", conflicts_with = "use_ml_classifier")]
+    /// produces no rows.
+    #[arg(long, value_name = "PATH")]
     pub emit_periods: Option<PathBuf>,
 
-    // -- Rule-based HOR layer (legacy, hor_call.rs) --------------------
-    /// Disable the rule-based HOR layer (kite-peaks-only output).
-    #[arg(long)]
-    pub no_hor_call: bool,
-
-    /// Rule layer: max multiplicity explored.
-    #[arg(long, default_value_t = 30)]
-    pub hor_qmax: usize,
-
-    /// Rule layer: minimum peaks in a family for the HOR verdict.
-    #[arg(long, default_value_t = 3)]
-    pub hor_min_family_size: usize,
-
-    /// Rule layer: family_score / total_score floor for the HOR verdict.
-    #[arg(long, default_value_t = 0.50)]
-    pub hor_min_family_share: f64,
-
-    /// Rule layer: top-peak / second-peak score ratio for the tandem
-    /// verdict.
-    #[arg(long, default_value_t = 3.0)]
-    pub hor_dominance: f64,
-
-    /// Rule layer: relative band (± × top1 period) for the jitter
-    /// detector that flags variable-length tandems as `unresolved`.
-    #[arg(long, default_value_t = 0.15)]
-    pub hor_jitter_tol: f64,
-
-    /// Rule layer: # of top peaks within the jitter band that triggers
-    /// `unresolved`.
-    #[arg(long, default_value_t = 4)]
-    pub hor_jitter_thr: usize,
-
-    /// Rule layer: minimum `tile_score / founder_score` for the HOR
-    /// verdict.
-    #[arg(long, default_value_t = 0.15)]
-    pub hor_min_tile_founder_ratio: f64,
-
-    // -- HOR classification ---------------------------------------
-    /// Apply the HOR classifier. By default this is the rule-based
-    /// classifier (`src/rule.rs`): d1 = k × p_n for some k ∈ [2,
-    /// qmax], with p_n a top-N kite peak. Adds per-record columns
+    /// Apply the rule-based HOR classifier (port of
+    /// `tools/rule_proto/rule_proto.py`). Adds per-record columns
     /// `verdict`, `founder`, `multiplicity`, `tile`, `share`.
-    /// Pass `--use-ml-classifier` to fall back to the legacy
-    /// probabilistic pipeline.
     #[arg(long)]
     pub classify: bool,
-
-    /// Use the legacy ML classifier (random forest + Platt + verdict
-    /// logic from earlier kitehor versions) instead of the rule.
-    /// Adds the ML-specific columns: `hor_score`, `hor_score_raw`,
-    /// `k_pred`, `recovered`, `h_d1`, `h_founder`. Requires the
-    /// random-forest JSON artefacts shipped under `models/`.
-    #[arg(long)]
-    pub use_ml_classifier: bool,
-
-    /// Rule layer: maximum HOR multiplicity considered. Default 30.
-    #[arg(long, default_value_t = 30)]
-    pub rule_qmax: usize,
-
-    /// Rule layer: founder candidate must be among the top-N kite
-    /// peaks by score. Default 3 (the user-validated value).
-    #[arg(long, default_value_t = 3)]
-    pub rule_top_n: usize,
-
-    /// Supplementary HOR-coverage QC (rule path only). For each HOR
-    /// call, slide a tile-length window across the array with step =
-    /// tile and compute Levenshtein identity vs the first tile. Adds
-    /// columns: `cov_mean`, `cov_pass_70/80/90`, `cov_first_half`,
-    /// `cov_second_half`, `cov_min`, `cov_max`, `cov_n_tiles`. Records
-    /// not called HOR get NA. Adds modest runtime (~ms per record for
-    /// typical tile sizes; longer for kb-scale tiles).
-    #[arg(long)]
-    pub coverage: bool,
-
-    /// ML override: classifier config TOML.
-    #[arg(long, value_name = "PATH")]
-    pub classifier_config: Option<PathBuf>,
-
-    /// ML override: HOR-score RF model JSON.
-    #[arg(long, value_name = "PATH")]
-    pub hor_model: Option<PathBuf>,
-
-    /// ML override: k-predictor RF model JSON.
-    #[arg(long, value_name = "PATH")]
-    pub k_model: Option<PathBuf>,
-
-    /// ML option: skip the homology probe (`h_d1`, `h_founder`); the
-    /// model falls back to the training-set imputation medians.
-    /// Only has effect under `--use-ml-classifier`.
-    #[arg(long)]
-    pub no_homology: bool,
 
     #[command(flatten)]
     pub qc: QcOpts,
@@ -346,8 +277,14 @@ pub struct DetectArgs {
     /// Input FASTA (one or many records).
     pub fasta: PathBuf,
     /// Period candidates TSV (matches `kitehor synth` output schema).
+    /// When omitted, kite-periodicity runs internally with default
+    /// settings to derive period candidates; the derived periods are
+    /// persisted to `<out>.periods.tsv` as part of the output bundle
+    /// and the implicit equivalent of `--allow-missing-periods` is
+    /// applied (records that fail kite QC end up classified as
+    /// `ambiguous`).
     #[arg(long)]
-    pub periods: PathBuf,
+    pub periods: Option<PathBuf>,
     /// Output prefix; writes PREFIX.properties.tsv, .segments.tsv,
     /// .width_features.tsv, .consensus.fa, and .diagnostics.json.
     #[arg(short, long, required = true)]
@@ -384,9 +321,15 @@ pub struct DetectBatchArgs {
     /// Directory of FASTA files (`<stem>.fa`).
     #[arg(long)]
     pub fasta_dir: PathBuf,
-    /// Directory of period TSVs (`<stem>.periods.tsv`).
+    /// Directory of period TSVs (`<stem>.periods.tsv`). When omitted,
+    /// kite-periodicity runs internally per FASTA to derive period
+    /// candidates and the derived periods are written to
+    /// `<out_dir>/<stem>.periods.tsv` alongside the detector outputs;
+    /// `--allow-missing-periods` / `--allow-extra-periods` are then
+    /// ignored because the auto path generates exactly the rows it
+    /// uses.
     #[arg(long)]
-    pub periods_dir: PathBuf,
+    pub periods_dir: Option<PathBuf>,
     /// Output directory. Each `<stem>` produces `<stem>.{properties,segments,width_features}.tsv`.
     #[arg(long)]
     pub out_dir: PathBuf,
@@ -414,6 +357,237 @@ pub struct DetectBatchArgs {
     pub allow_extra_periods: bool,
     #[arg(long, default_value_t = 0)]
     pub threads: usize,
+}
+
+// ---------------------------------------------------------------------------
+// rule-classify
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct RuleClassifyArgs {
+    /// Kite peaks long-format TSV (one row per kept peak per record).
+    /// Required columns: `case_id, rank, period, score2_norm`.
+    pub peaks: PathBuf,
+
+    /// Output prefix. Writes `<prefix>.verdicts.tsv`.
+    #[arg(short, long)]
+    pub out: PathBuf,
+
+    /// Cluster-gap + multiplicity rounding tolerance (relative).
+    #[arg(long, default_value_t = 0.015)]
+    pub tol: f64,
+
+    /// Drop peaks with `period < min_period` (k-mer floor).
+    #[arg(long, default_value_t = 20)]
+    pub min_period: usize,
+
+    /// Drop clusters with `total_score < min_cluster_frac × max_cluster_score`.
+    #[arg(long, default_value_t = 0.01)]
+    pub min_cluster_frac: f64,
+
+    /// Maximum multiplicity considered.
+    #[arg(long, default_value_t = 30)]
+    pub k_max: usize,
+
+    /// Case B k=2: a longer `k×top` cluster qualifies as tile when its
+    /// `total_score / top.total_score` exceeds this.
+    #[arg(long, default_value_t = 0.5)]
+    pub non_mono_ratio: f64,
+
+    /// Case A: founder cluster score must be >= `founder_floor × top.score`.
+    #[arg(long, default_value_t = 0.1)]
+    pub founder_floor: f64,
+
+    /// Case B k>=3: tile cluster score floor (× top.score).
+    #[arg(long, default_value_t = 0.05)]
+    pub high_k_tile_floor: f64,
+
+    /// Lone-significant-cluster fallback floor (× top.score). After
+    /// Case A and Case B fail AND no harmonic multiples exist, if
+    /// exactly one cluster passes this floor, call the array a
+    /// simple_tr with `reason = lone_significant_cluster`.
+    #[arg(long, default_value_t = 0.1)]
+    pub lone_significant_frac: f64,
+
+    /// Optional: write per-case cluster dumps to this directory.
+    #[arg(long, value_name = "DIR")]
+    pub dump_clusters: Option<PathBuf>,
+}
+
+// ---------------------------------------------------------------------------
+// analyze (end-to-end orchestrator)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct AnalyzeArgs {
+    /// Input FASTA.
+    pub fasta: PathBuf,
+    /// Output prefix. Writes 8 TSVs: `<prefix>.kite.tsv`,
+    /// `.kite.peaks.tsv`, `.verdicts.tsv`, `.subrepeat.tsv`,
+    /// `.windows.tsv`, `.ssr.tsv`, `.ssr.regions.tsv`,
+    /// `.hor_within_tile.tsv`, `.summary.tsv`.
+    #[arg(short, long, required = true)]
+    pub out: PathBuf,
+    /// Number of rayon worker threads (0 = auto).
+    #[arg(long, default_value_t = 0)]
+    pub threads: usize,
+    // Stage-prefixed tunables.
+    #[arg(long, default_value_t = 0.015)]
+    pub rule_tol: f64,
+    #[arg(long, default_value_t = 20)]
+    pub rule_min_period: usize,
+    #[arg(long, default_value_t = 30)]
+    pub rule_k_max: usize,
+    #[arg(long, default_value_t = 80.0)]
+    pub pure_ssr_pct_threshold: f64,
+    #[arg(long, default_value_t = 30.0)]
+    pub ssr_flag_threshold_pct: f64,
+}
+
+// ---------------------------------------------------------------------------
+// subrepeat-scan
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct SubrepeatScanArgs {
+    /// Input FASTA.
+    pub fasta: PathBuf,
+    /// Output prefix.
+    #[arg(short, long, required = true)]
+    pub out: PathBuf,
+    /// Required kite peaks TSV (long-format) for candidate selection.
+    /// In the orchestrator (`analyze`), wired from kite-periodicity
+    /// output automatically.
+    #[arg(long, required = true)]
+    pub kite_peaks: PathBuf,
+    #[arg(long, default_value_t = 0.05)]
+    pub tol: f64,
+    #[arg(long, default_value_t = 5)]
+    pub window_mult_sub: usize,
+    #[arg(long, default_value_t = 4)]
+    pub step_frac: usize,
+    #[arg(long, default_value_t = 3)]
+    pub top_n_sub: usize,
+    #[arg(long, default_value_t = 10)]
+    pub top_n_host: usize,
+    #[arg(long, default_value_t = 0.05)]
+    pub sub_floor: f64,
+    #[arg(long, default_value_t = 0.3)]
+    pub window_score_floor: f64,
+    #[arg(long, default_value_t = 3)]
+    pub min_run: usize,
+    #[arg(long, default_value_t = 3)]
+    pub host_sub_ratio_min: usize,
+    #[arg(long, default_value_t = 1000)]
+    pub min_window_bp: usize,
+}
+
+// ---------------------------------------------------------------------------
+// hor-validate
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct HorValidateArgs {
+    /// Input FASTA.
+    pub fasta: PathBuf,
+    /// rule-classify verdicts TSV.
+    #[arg(long, required = true)]
+    pub verdicts: PathBuf,
+    /// Global kite peaks TSV (long-format).
+    #[arg(long, required = true)]
+    pub global_peaks: PathBuf,
+    /// Output prefix.
+    #[arg(short, long, required = true)]
+    pub out: PathBuf,
+    #[arg(long, default_value_t = 0.02)]
+    pub period_match_tol: f64,
+    #[arg(long, default_value_t = 4)]
+    pub min_k_for_density: u32,
+    #[arg(long, default_value_t = 3)]
+    pub density_window_tile_frac: usize,
+    #[arg(long, default_value_t = 3)]
+    pub min_founder_mult: usize,
+    #[arg(long, default_value_t = 200)]
+    pub min_density_window_bp: usize,
+    #[arg(long, default_value_t = 1000)]
+    pub max_density_windows: usize,
+    #[arg(long, default_value_t = 0.2)]
+    pub density_rel_floor: f64,
+    #[arg(long, default_value_t = 10)]
+    pub phase_fold_bins: usize,
+    #[arg(long, default_value_t = 0.35)]
+    pub density_dup_max: f64,
+    #[arg(long, default_value_t = 0.7)]
+    pub density_hor_min: f64,
+    #[arg(long, default_value_t = 0.4)]
+    pub phase_contrast_dup_min: f64,
+    #[arg(long, default_value_t = 0.15)]
+    pub phase_contrast_hor_max: f64,
+    #[arg(long, default_value_t = 200_000)]
+    pub max_tile_bp: usize,
+    #[arg(long, default_value_t = 200)]
+    pub min_window_bp: usize,
+}
+
+// ---------------------------------------------------------------------------
+// ssr-scan
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct SsrScanArgs {
+    /// Input FASTA.
+    pub fasta: PathBuf,
+    /// Output prefix. Writes `<prefix>.ssr.tsv` and `<prefix>.ssr.regions.tsv`.
+    #[arg(short, long, required = true)]
+    pub out: PathBuf,
+    /// Optional kite peaks TSV. When supplied, the authoritative scan
+    /// uses the consensus-dimer path; otherwise it falls back to raw.
+    #[arg(long)]
+    pub kite_peaks: Option<PathBuf>,
+    /// `ssr_flag = yes` when `dominant_motif_coverage_pct ≥` this.
+    #[arg(long, default_value_t = 30.0)]
+    pub ssr_flag_threshold_pct: f64,
+    /// `monomer × n` copies for the consensus dimer.
+    #[arg(long, default_value_t = 4)]
+    pub consensus_dimer_copies: usize,
+    /// Minimum consensus dimer length (bp) (extended by repeating).
+    #[arg(long, default_value_t = 30)]
+    pub consensus_dimer_min_bp: usize,
+    /// Top-K canonical-distinct consensus monomers considered per record.
+    #[arg(long, default_value_t = 3)]
+    pub consensus_max_monomers: usize,
+    /// Stop extracting consensus monomers when count drops below this
+    /// fraction of the top k-mer's count.
+    #[arg(long, default_value_t = 0.3)]
+    pub consensus_freq_ratio_min: f64,
+    /// Per-motif-length minimum repeat counts as `"L:reps,L:reps,…"`.
+    /// Default: TideCluster — `"1:20,2:9,3:6,4:5,5:5,6:5,7:5,8:5,9:5,10:5,11:5,12:5,13:5,14:5"`.
+    #[arg(long, default_value = "1:20,2:9,3:6,4:5,5:5,6:5,7:5,8:5,9:5,10:5,11:5,12:5,13:5,14:5")]
+    pub motif_min_reps: String,
+}
+
+#[derive(Debug, Args)]
+pub struct SummaryMergeArgs {
+    /// rule-classify verdicts TSV (`case_id` column).
+    #[arg(long, required = true)]
+    pub verdicts: PathBuf,
+    /// subrepeat-scan TSV (`record_id` column).
+    #[arg(long, required = true)]
+    pub subrepeat: PathBuf,
+    /// ssr-scan TSV (`record_id` column).
+    #[arg(long, required = true)]
+    pub ssr: PathBuf,
+    /// Optional hor-validate TSV. When supplied, `density_hint =
+    /// localized_duplication` rows fire `combined_class =
+    /// tr_with_subrepeat`.
+    #[arg(long)]
+    pub within_tile: Option<PathBuf>,
+    /// Output prefix. Writes `<prefix>.summary.tsv`.
+    #[arg(short, long, required = true)]
+    pub out: PathBuf,
+    /// `pure_ssr` fires when `ssr_dominant_motif_coverage_pct ≥` this.
+    #[arg(long, default_value_t = 80.0)]
+    pub pure_ssr_pct_threshold: f64,
 }
 
 #[derive(Debug, Args)]

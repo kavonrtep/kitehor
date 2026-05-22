@@ -4,74 +4,104 @@ Local-only notes for working in this repo with Claude Code.
 
 ## What this is
 
-Sequence-agnostic HOR detector. Two pipelines coexist:
+Sequence-agnostic HOR detector. Three top-level workflows:
 
-1. **Rule classifier on kite peaks** (workhorse):
+1. **Rule-proto pipeline** (workhorse, port of
+   `tools/rule_proto/*.py` — see `docs/rule_proto.md`):
    ```
+   # End-to-end
+   kitehor analyze <fasta> -o <prefix>
+
+   # Or per stage:
    kitehor kite-periodicity <fasta> -o out.tsv --classify
+   kitehor rule-classify <peaks.tsv> -o <prefix>
+   kitehor subrepeat-scan <fasta> --kite-peaks <peaks.tsv> -o <prefix>
+   kitehor ssr-scan <fasta> --kite-peaks <peaks.tsv> -o <prefix>
+   kitehor hor-validate <fasta> --verdicts <v.tsv> --global-peaks <p.tsv> -o <prefix>
+   kitehor summary-merge --verdicts ... --subrepeat ... --ssr ... -o <prefix>
    ```
-   Runs kite → 4-condition rule (`src/rule.rs`): HOR ⟺ d1 = k×p_n
-   for k ∈ [2, 30] with p_n in top-3 by score. See `docs/rule.md`.
+   `analyze` always emits all 8 per-stage TSVs (debugging contract).
+   The 8 combined_class values: `pure_ssr, tr_with_nested_tr,
+   tr_with_subrepeat, hor_with_ssr, hor, tr_with_ssr, tr, unresolved`.
+   Replaces the older 4-condition rule (`src/rule.rs`) and the legacy
+   ML pipeline (both removed in P1 / P6 of the port).
 
-2. **v2 line-width detector** (`docs/new/detect_spec.md`):
+3. **v2 line-width detector** (`docs/new/detect_spec.md`):
    ```
-   kitehor detect <fasta> --periods <periods.tsv> -o <prefix>
+   kitehor detect <fasta> -o <prefix>                       # auto-periods (default)
+   kitehor detect <fasta> --periods <periods.tsv> -o <prefix>  # explicit periods
    ```
-   Consumes a `periods.tsv` (v2 schema) and produces
-   `<prefix>.properties.tsv` / `.segments.tsv` (13 columns post-M7.2;
-   includes `consensus_identity_to_reference` + `_coverage`) /
+   With `--periods` omitted, the detector runs `kite-periodicity` +
+   the rule classifier internally with their defaults, persists the
+   derived periods to `<prefix>.periods.tsv`, and implicitly applies
+   `--allow-missing-periods` so QC-rejected records end up
+   classified as `ambiguous`. Score mapping is the same as
+   `kite-periodicity --classify --emit-periods` (founder=0.95,
+   tile=0.90, other top-3=0.60; `Unresolved` hints at
+   0.50/0.40/0.30). For tuned kite parameters (kmer size, score2
+   threshold, rule top-N, …), run the explicit two-step pipeline
+   (§3) and pass the resulting `periods.tsv` via `--periods`.
+
+   Bundle outputs (both modes): `<prefix>.properties.tsv` /
+   `.segments.tsv` (13 columns post-M7.2; includes
+   `consensus_identity_to_reference` + `_coverage`) /
    `.width_features.tsv` / `.diagnostics.json` (`schema_version=2`
    post-M7.3) / `.consensus.fa` (per-segment monomers for class=mixed,
    whole-array monomer + optional hor_unit for resolved classes).
+   Auto-mode additionally writes `<prefix>.periods.tsv`.
+
    Calibration baseline: 94.4% per-class accuracy oracle, 90.6% kite
    periods (1600-case `ground_truth_v2/`).
 
-3. **Combined pipeline** (kite candidates → detector):
+4. **Explicit two-step kite → detector pipeline** (useful when you
+   need to tune kite or inspect intermediate output):
    ```
    kitehor kite-periodicity <fasta> -o /tmp/kite.tsv --classify \
        --emit-periods /tmp/kite.periods.tsv
    kitehor detect <fasta> --periods /tmp/kite.periods.tsv -o /tmp/det \
        --allow-missing-periods
    ```
-   Score mapping in `src/emit_periods.rs`: founder=0.95,
-   tile=0.90, other top-3=0.60; ambiguous verdicts (`Unresolved`)
-   emit hints at 0.50/0.40/0.30. `--allow-missing-periods` is
-   needed when kite produces no rows for a record — either because
+   Produces byte-identical detector output to the auto-mode form
+   above when kite is run with its defaults. `--allow-missing-periods`
+   is needed when kite produces no rows for a record — either because
    the rule returned `NoSignal`, or because the FASTA record was
    rejected by kite's `LoadQC` (e.g., too short, too many Ns). In
-   both cases the detector will tag the record `ambiguous`.
+   both cases the detector tags the record `ambiguous`.
 
-The earlier ML pipeline (RF + Platt + k-recovery + homology) is still
-available via `--use-ml-classifier`. It is over-sensitive on real
-centromeric arrays and under-sensitive on real HORs with strong
-inter-position divergence (the training-set distribution doesn't match
-real data) — use only when the input is drawn from a similar
-distribution to the synthetic training corpus.
+The legacy ML pipeline (RF + Platt + k-recovery + homology) and its
+CLI flags (`--use-ml-classifier`, `--no-hor-call`, `--hor-*`,
+`--coverage`, etc.) were removed in P6 of the rule-proto port.
 
 ## Repo layout shortcut
 
 ```
-src/                  Rust crate (lib + bin)
-  rule.rs             default HOR classifier (4-condition rule)
-  classifier.rs       legacy ML loader (RF + Platt); used only under --use-ml-classifier
-  classify.rs         legacy ML verdict orchestrator
-  emit_periods.rs     bridge: kite output → v2 detector periods.tsv
-  detect/             ← v2 line-width detector (`kitehor detect*`)
-  simulate*.rs        legacy params.tsv-driven simulator (training corpus)
-  synth/              ← v2 YAML-driven simulator (`kitehor synth*`)
-config/classifier.toml legacy ML thresholds (only consulted with --use-ml-classifier)
-models/               Legacy RF JSON (baked into binary; loaded only by ML path)
-tools/training/       R training pipeline for the legacy model
-tools/features/       Python reference feature extractors (for ML cross-check)
-ground_truth/         legacy params.tsv + simulator helpers; sequences regenerated
-ground_truth_v2/      ← v2 corpus spec (1600 configs in 9 categories) + run_batch.sh
-test_data/smoke/      87 KB synthetic fixture for build verification
-tests/synth_configs/  ← v2 CI fixtures (T01–T20; 23 active + 1 deferred)
-examples/             validate_rf — legacy ML cross-check vs an R reference TSV
-conda/kitehor/        conda recipe (meta.yaml; built by .github/workflows/conda-release.yml)
-.github/workflows/    ci.yml, release.yml, conda-release.yml
+src/                    Rust crate (lib + bin)
+  analyze.rs            ← end-to-end rule-proto pipeline orchestrator
+  rule_classify/        ← HOR / simple_tr / unresolved classifier
+                          (port of tools/rule_proto/rule_proto.py)
+  subrepeat/            ← nested-TR detector (subrepeat_scan.py)
+  ssr/                  ← TideCluster SSR scan + consensus (ssr_scan.py)
+  hor_validate/         ← within-tile + density (hor_within_tile_check.py)
+  summary/              ← 8-rule combined_class merger (summary.py)
+  kite.rs               k-mer periodogram (the upstream stage)
+  emit_periods.rs       bridge: kite output → v2 detector periods.tsv
+  detect/               ← v2 line-width detector (`kitehor detect*`)
+  simulate*.rs          legacy params.tsv-driven simulator
+  synth/                ← v2 YAML-driven simulator (`kitehor synth*`)
+  monomer_model.rs      `probe_period` helper (currently unused;
+                          retained for potential future use)
+tools/rule_proto/       Python prototype kept as the reference oracle
+                          (validation target; not invoked at runtime)
+ground_truth/           legacy params.tsv + simulator helpers
+ground_truth_v2/        ← v2 corpus spec (1600 configs) + run_batch.sh
+test_data/smoke/        87 KB synthetic fixture for build verification
+test_data/ci_corpus/    diverse small corpus from prototype run (P7)
+tests/synth_configs/    ← v2 CI fixtures (T01–T20; 23 active + 1 deferred)
+conda/kitehor/          conda recipe
+.github/workflows/      ci.yml, release.yml, conda-release.yml
 docs/                 project docs
-  rule.md             ← the rule classifier, current default
+  rule_proto.md       ← the rule-proto pipeline (current default)
+  rule.md             archived — the older 4-condition rule (P1 retirement)
   ci-status.md        ← CI/release plan + runbook
   new/                ← v2 simulator + detector design docs
     taxonomy.md         structural taxonomy of tandem-repeat arrays
@@ -125,10 +155,18 @@ for the implementation contract and milestone acceptance gates.
 - **Smoke**:
   ```
   ./target/release/kitehor kite-periodicity test_data/smoke/sequences.fasta \
-      -o /tmp/smoke.tsv --classify --no-hor-call
+      -o /tmp/smoke.tsv --classify
   ```
-  Expect: `tandem_pure`→tandem, `hor_k3`→hor (k=3, founder=100, tile=300),
+  Expect: `tandem_pure`→simple_tr, `hor_k3`→hor (k=3, founder=100, tile=300),
   `hor_k5`→hor (k=5, founder=150, tile=750).
+
+- **End-to-end smoke** (rule-proto pipeline):
+  ```
+  ./target/release/kitehor analyze test_data/smoke/sequences.fasta \
+      -o /tmp/smoke
+  ```
+  Writes 8 per-stage TSVs at `/tmp/smoke.*.tsv` plus `.summary.tsv`.
+  `combined_class` column on the summary: hor / hor / tr.
 
 - **Full benchmark**: regenerate `ground_truth/sequences.fasta` from
   `ground_truth/params.tsv` (1,600 cases) before running the classifier
@@ -159,7 +197,17 @@ for the implementation contract and milestone acceptance gates.
   ```
   Calibration baseline 94.4% (M6 acceptance gate).
 
-- **Combined pipeline smoke** (kite → emit-periods → detect):
+- **Auto-mode smoke** (one-step kite + detect):
+  ```
+  ./target/release/kitehor detect \
+      test_data/smoke/sequences.fasta -o /tmp/smoke.det
+  ```
+  Internally runs `kite-periodicity --classify` with kite defaults,
+  derives periods, persists them to `/tmp/smoke.det.periods.tsv`,
+  and runs the detector. Reads `/tmp/smoke.det.properties.tsv` for
+  per-record classes.
+
+- **Explicit two-step smoke** (when tuning kite knobs is needed):
   ```
   ./target/release/kitehor kite-periodicity \
       test_data/smoke/sequences.fasta -o /tmp/smoke.kite.tsv \
@@ -169,7 +217,7 @@ for the implementation contract and milestone acceptance gates.
       --periods /tmp/smoke.kite.periods.tsv -o /tmp/smoke.det \
       --allow-missing-periods
   ```
-  Reads `/tmp/smoke.det.properties.tsv` for per-record classes.
+  Byte-equivalent to auto-mode when kite is run with defaults.
 
 ## Data policy
 

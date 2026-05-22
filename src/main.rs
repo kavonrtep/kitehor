@@ -2,19 +2,15 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use kitehor::classifier::{ClassifierConfig, RandomForest, BAKED_HOR_MODEL, BAKED_K_MODEL};
-use kitehor::classify::{classify as run_classify, Verdict};
 use kitehor::cli::{
-    Cli, Command, DetectArgs, DetectBatchArgs, KitePeriodicityArgs, SimulateArgs,
-    SimulateGridArgs, SynthArgs, SynthBatchArgs, SynthValidateArgs,
+    AnalyzeArgs, Cli, Command, DetectArgs, DetectBatchArgs, HorValidateArgs,
+    KitePeriodicityArgs, RuleClassifyArgs, SimulateArgs, SimulateGridArgs, SsrScanArgs,
+    SubrepeatScanArgs, SummaryMergeArgs, SynthArgs, SynthBatchArgs, SynthValidateArgs,
 };
-use kitehor::features::{build_features, FeatureRow};
-use kitehor::hor_call::{classify as hor_classify, HorCallConfig};
 use kitehor::io::{load_fasta, LoadQc, LoadStatus};
 use kitehor::kite::{analyze as kite_analyze, KiteConfig};
-use kitehor::monomer_model::{probe_period, MonomerModelConfig};
 use kitehor::simulate::{simulate, SimulateParams};
-use log::{info, warn};
+use log::info;
 use rayon::prelude::*;
 
 fn main() -> Result<()> {
@@ -30,7 +26,142 @@ fn main() -> Result<()> {
         Command::SynthBatch(args) => run_synth_batch(args),
         Command::Detect(args) => run_detect(args),
         Command::DetectBatch(args) => run_detect_batch(args),
+        Command::RuleClassify(args) => run_rule_classify(args),
+        Command::SummaryMerge(args) => run_summary_merge(args),
+        Command::SsrScan(args) => run_ssr_scan(args),
+        Command::SubrepeatScan(args) => run_subrepeat_scan(args),
+        Command::HorValidate(args) => run_hor_validate(args),
+        Command::Analyze(args) => run_analyze(args),
     }
+}
+
+fn run_analyze(args: AnalyzeArgs) -> Result<()> {
+    if args.threads > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global()
+            .ok();
+    }
+    let mut cfg = kitehor::analyze::Config::default();
+    cfg.rule.tol = args.rule_tol;
+    cfg.rule.min_period = args.rule_min_period;
+    cfg.rule.k_max = args.rule_k_max;
+    cfg.summary.pure_ssr_pct_threshold = args.pure_ssr_pct_threshold;
+    cfg.ssr.ssr_flag_threshold_pct = args.ssr_flag_threshold_pct;
+    let report = kitehor::analyze::run(&args.fasta, &args.out, &cfg)?;
+    info!(
+        "analyze: {} record(s) — hor={} simple_tr={} unresolved={}",
+        report.n_records, report.n_hor, report.n_tr, report.n_unresolved
+    );
+    Ok(())
+}
+
+fn run_subrepeat_scan(args: SubrepeatScanArgs) -> Result<()> {
+    let cfg = kitehor::subrepeat::Config {
+        tol: args.tol,
+        window_mult_sub: args.window_mult_sub,
+        step_frac: args.step_frac,
+        top_n_sub: args.top_n_sub,
+        top_n_host: args.top_n_host,
+        sub_floor: args.sub_floor,
+        window_score_floor: args.window_score_floor,
+        min_run: args.min_run,
+        host_sub_ratio_min: args.host_sub_ratio_min,
+        min_window_bp: args.min_window_bp,
+    };
+    let n = kitehor::subrepeat::run_subcommand(
+        &args.fasta,
+        &args.out,
+        &args.kite_peaks,
+        &cfg,
+    )?;
+    info!("subrepeat-scan: scanned {n} record(s)");
+    Ok(())
+}
+
+fn run_hor_validate(args: HorValidateArgs) -> Result<()> {
+    let cfg = kitehor::hor_validate::Config {
+        period_match_tol: args.period_match_tol,
+        min_k_for_density: args.min_k_for_density,
+        density_window_tile_frac: args.density_window_tile_frac,
+        min_founder_mult: args.min_founder_mult,
+        min_density_window_bp: args.min_density_window_bp,
+        max_density_windows: args.max_density_windows,
+        density_rel_floor: args.density_rel_floor,
+        phase_fold_bins: args.phase_fold_bins,
+        density_dup_max: args.density_dup_max,
+        density_hor_min: args.density_hor_min,
+        phase_contrast_dup_min: args.phase_contrast_dup_min,
+        phase_contrast_hor_max: args.phase_contrast_hor_max,
+        max_tile_bp: args.max_tile_bp,
+        min_window_bp: args.min_window_bp,
+    };
+    let n = kitehor::hor_validate::run_subcommand(
+        &args.fasta,
+        &args.verdicts,
+        &args.global_peaks,
+        &args.out,
+        &cfg,
+    )?;
+    info!("hor-validate: wrote {n} row(s)");
+    Ok(())
+}
+
+fn run_ssr_scan(args: SsrScanArgs) -> Result<()> {
+    let specs = kitehor::ssr::parse_motif_min_reps(&args.motif_min_reps)?;
+    let cfg = kitehor::ssr::Config {
+        ssr_flag_threshold_pct: args.ssr_flag_threshold_pct,
+        specs,
+        consensus_dimer_copies: args.consensus_dimer_copies,
+        consensus_dimer_min_bp: args.consensus_dimer_min_bp,
+        consensus_max_monomers: args.consensus_max_monomers,
+        consensus_freq_ratio_min: args.consensus_freq_ratio_min,
+    };
+    let n = kitehor::ssr::run_subcommand(
+        &args.fasta,
+        &args.out,
+        args.kite_peaks.as_deref(),
+        &cfg,
+    )?;
+    info!("ssr-scan: scanned {n} record(s)");
+    Ok(())
+}
+
+fn run_summary_merge(args: SummaryMergeArgs) -> Result<()> {
+    let cfg = kitehor::summary::Config {
+        pure_ssr_pct_threshold: args.pure_ssr_pct_threshold,
+    };
+    let n = kitehor::summary::run_subcommand(
+        &args.verdicts,
+        &args.subrepeat,
+        &args.ssr,
+        args.within_tile.as_deref(),
+        &args.out,
+        &cfg,
+    )?;
+    info!("summary-merge: wrote {n} row(s)");
+    Ok(())
+}
+
+fn run_rule_classify(args: RuleClassifyArgs) -> Result<()> {
+    let cfg = kitehor::rule_classify::Config {
+        tol: args.tol,
+        min_period: args.min_period,
+        min_cluster_frac: args.min_cluster_frac,
+        k_max: args.k_max,
+        non_mono_ratio: args.non_mono_ratio,
+        founder_floor: args.founder_floor,
+        high_k_tile_floor: args.high_k_tile_floor,
+        lone_significant_frac: args.lone_significant_frac,
+    };
+    let n = kitehor::rule_classify::run_subcommand(
+        &args.peaks,
+        &args.out,
+        &cfg,
+        args.dump_clusters.as_deref(),
+    )?;
+    info!("rule-classify: wrote {n} verdict(s)");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -70,15 +201,25 @@ fn run_detect(args: DetectArgs) -> Result<()> {
         export_edges: args.export_edges,
         export_ic: args.export_ic,
     };
-    let report = kitehor::detect::run_one(
-        &args.fasta,
-        &args.periods,
-        &args.out,
-        &cfg,
-        &viz_flags,
-        args.allow_missing_periods,
-        args.allow_extra_periods,
-    )?;
+    let report = match args.periods.as_ref() {
+        Some(p) => kitehor::detect::run_one(
+            &args.fasta,
+            p,
+            &args.out,
+            &cfg,
+            &viz_flags,
+            args.allow_missing_periods,
+            args.allow_extra_periods,
+        )?,
+        None => {
+            info!(
+                "detect: --periods not supplied; deriving via kite-periodicity \
+                 with defaults (writes {:?}.periods.tsv)",
+                args.out
+            );
+            kitehor::detect::run_one_auto(&args.fasta, &args.out, &cfg, &viz_flags)?
+        }
+    };
     info!(
         "detect: {} array(s), {} segment(s), {} width row(s); prefix {:?}",
         report.n_arrays, report.n_segments, report.n_width_rows, args.out
@@ -107,15 +248,25 @@ fn run_detect_batch(args: DetectBatchArgs) -> Result<()> {
         export_edges: args.export_edges,
         export_ic: args.export_ic,
     };
-    let n = kitehor::detect::run_batch(
-        &args.fasta_dir,
-        &args.periods_dir,
-        &args.out_dir,
-        &cfg,
-        &viz_flags,
-        args.allow_missing_periods,
-        args.allow_extra_periods,
-    )?;
+    let n = match args.periods_dir.as_ref() {
+        Some(p) => kitehor::detect::run_batch(
+            &args.fasta_dir,
+            p,
+            &args.out_dir,
+            &cfg,
+            &viz_flags,
+            args.allow_missing_periods,
+            args.allow_extra_periods,
+        )?,
+        None => {
+            info!(
+                "detect-batch: --periods-dir not supplied; deriving periods \
+                 per FASTA via kite-periodicity with defaults (writes \
+                 <stem>.periods.tsv alongside each output bundle)"
+            );
+            kitehor::detect::run_batch_auto(&args.fasta_dir, &args.out_dir, &cfg, &viz_flags)?
+        }
+    };
     info!("detect-batch: processed {n} array(s) into {:?}", args.out_dir);
     Ok(())
 }
@@ -218,17 +369,6 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
         min_peak_distance: args.min_peak_distance,
         bg_smoothing_sigma: args.bg_sigma,
     };
-    let hor_cfg = HorCallConfig {
-        qmax: args.hor_qmax,
-        min_family_size: args.hor_min_family_size,
-        min_family_share: args.hor_min_family_share,
-        dominance: args.hor_dominance,
-        jitter_tol: args.hor_jitter_tol,
-        jitter_thr: args.hor_jitter_thr,
-        min_tile_founder_ratio: args.hor_min_tile_founder_ratio,
-        ..HorCallConfig::default()
-    };
-    let hor_enabled = !args.no_hor_call;
 
     let mut loaded = Vec::new();
     for path in &args.fasta {
@@ -272,141 +412,22 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
         }
     }
 
-    // --- Optional HOR classification ---
-    //
-    // Default path: rule-based classifier (src/rule.rs). Triggered by
-    // `--classify`. Trusts kite peak filtering and looks for an
-    // integer-multiple relation between d1 and a top-N kite peak.
-    //
-    // Opt-in legacy ML path: `--classify --use-ml-classifier`. Loads
-    // the baked random forests + Platt, runs feature extraction +
-    // homology probing + verdict orchestrator. Same output columns as
-    // earlier kitehor versions.
+    // --- HOR classification (rule-based, port of rule_proto.py) ---
     let classify_enabled = args.classify;
-    let use_ml = args.use_ml_classifier;
-    let rule_cfg = kitehor::rule::RuleConfig {
-        top_n: args.rule_top_n,
-        qmax: args.rule_qmax,
-        ..kitehor::rule::RuleConfig::default()
-    };
-
-    let rule_verdicts: Vec<kitehor::rule::RuleVerdict> = if classify_enabled && !use_ml {
+    let rule_cfg = kitehor::rule_classify::Config::default();
+    let rule_verdicts: Vec<kitehor::rule_classify::LegacyVerdict> = if classify_enabled {
         results
             .iter()
-            .map(|kr| kitehor::rule::classify(kr, &rule_cfg))
+            .map(|kr| {
+                kitehor::rule_classify::LegacyVerdict::from_verdict(
+                    &kitehor::rule_classify::classify(kr, &rule_cfg),
+                )
+            })
             .collect()
     } else {
         Vec::new()
     };
-
-    // Supplementary HOR-coverage QC. Only runs under the rule path,
-    // only when --coverage is set, only for records the rule called as
-    // HOR. Computed in parallel; non-HOR records get None.
-    let coverage_results: Vec<Option<kitehor::coverage::TileCoverage>> =
-        if classify_enabled && !use_ml && args.coverage {
-            use kitehor::coverage::compute_tile_coverage;
-            ok_records
-                .par_iter()
-                .zip(rule_verdicts.par_iter())
-                .map(|(rec, verdict)| match verdict.tile() {
-                    Some(t) if verdict.as_str() == "hor" => compute_tile_coverage(&rec.seq, t),
-                    _ => None,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-    let ml_verdicts: Vec<(FeatureRow, Verdict)> = if classify_enabled && use_ml {
-        let cls_cfg = match &args.classifier_config {
-            Some(p) => ClassifierConfig::load(p)?,
-            None => ClassifierConfig::default_baked()?,
-        };
-        let hor_model = match &args.hor_model {
-            Some(p) => RandomForest::load_json(p)
-                .with_context(|| format!("loading HOR-score model {:?}", p))?,
-            None => RandomForest::load_json_bytes(BAKED_HOR_MODEL)
-                .context("loading baked-in HOR-score model")?,
-        };
-        let k_model = match &args.k_model {
-            Some(p) => match RandomForest::load_json(p) {
-                Ok(m) => Some(m),
-                Err(e) => {
-                    warn!(
-                        "k-predictor model {:?} not loaded ({}) — k-recovery disabled",
-                        p, e
-                    );
-                    None
-                }
-            },
-            None => match RandomForest::load_json_bytes(BAKED_K_MODEL) {
-                Ok(m) => Some(m),
-                Err(e) => {
-                    warn!(
-                        "baked-in k-predictor model failed to load ({}) — k-recovery disabled",
-                        e
-                    );
-                    None
-                }
-            },
-        };
-        let platt = cls_cfg.platt();
-
-        let mut features: Vec<FeatureRow> = ok_records
-            .par_iter()
-            .zip(results.par_iter())
-            .map(|(rec, kr)| build_features(rec, kr))
-            .collect();
-
-        if !args.no_homology {
-            let mm_cfg = MonomerModelConfig::default();
-            let mut probes: Vec<(usize, usize)> = Vec::with_capacity(features.len() * 2);
-            for (i, f) in features.iter().enumerate() {
-                if f.d1 > 0 {
-                    probes.push((i, f.d1));
-                }
-                if f.family_founder_d > 0 && f.family_founder_d != f.d1 {
-                    probes.push((i, f.family_founder_d));
-                }
-            }
-            let probe_results: Vec<((usize, usize), Option<f64>)> = probes
-                .par_iter()
-                .map(|&(i, p)| {
-                    let h = probe_period(ok_records[i], p, &mm_cfg).map(|(h, _, _)| h);
-                    ((i, p), h)
-                })
-                .collect();
-            for ((i, p), h) in probe_results {
-                if let Some(h) = h {
-                    if p == features[i].d1 {
-                        features[i].h_d1 = h;
-                    }
-                    if p == features[i].family_founder_d {
-                        features[i].h_founder = h;
-                    }
-                }
-            }
-            for f in features.iter_mut() {
-                if f.h_founder.is_nan() {
-                    f.h_founder = f.h_d1;
-                }
-            }
-        }
-
-        let verdicts: Vec<(FeatureRow, Verdict)> = features
-            .into_iter()
-            .map(|mut f| {
-                let v = run_classify(&mut f, &cls_cfg, &platt, &hor_model, k_model.as_ref());
-                (f, v)
-            })
-            .collect();
-        info!("ML classifier: applied to {} record(s)", verdicts.len());
-        verdicts
-    } else {
-        Vec::new()
-    };
-
-    if classify_enabled && !use_ml {
+    if classify_enabled {
         info!(
             "rule classifier: applied to {} record(s)",
             rule_verdicts.len()
@@ -414,14 +435,8 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
     }
 
     // --- Optional v2-detector periods.tsv emission ---
-    //
-    // Bridge from kite output → `kitehor detect --periods`. Source +
-    // score mapping documented in `src/emit_periods.rs`. The ML
-    // classifier path doesn't produce founder/tile in the v2 sense,
-    // so under `--use-ml-classifier` we fall back to raw kite peaks
-    // (the same path as "no classifier ran").
     if let Some(periods_path) = args.emit_periods.as_ref() {
-        let batches: Vec<Vec<kitehor::emit_periods::PeriodsRow>> = if classify_enabled && !use_ml {
+        let batches: Vec<Vec<kitehor::emit_periods::PeriodsRow>> = if classify_enabled {
             results
                 .iter()
                 .zip(rule_verdicts.iter())
@@ -458,27 +473,8 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
          \tmonomer_size_2\tscore_2\
          \tmonomer_size_3\tscore_3",
     );
-    if hor_enabled {
-        header.push_str(
-            "\thor_call\thor_founder\thor_multiplicity\thor_tile\
-             \thor_family_size\thor_family_score\thor_jitter\thor_reason",
-        );
-    }
-    if classify_enabled && !use_ml {
+    if classify_enabled {
         header.push_str("\tverdict\tfounder\tmultiplicity\ttile\tshare");
-        if args.coverage {
-            header.push_str(
-                "\tcov_mean\tcov_pass_70\tcov_pass_80\tcov_pass_90\
-                 \tcov_first_half\tcov_second_half\tcov_min\tcov_max\tcov_n_tiles",
-            );
-        }
-    }
-    if classify_enabled && use_ml {
-        header.push_str(
-            "\thor_score\thor_score_raw\tverdict\
-             \tfounder\tmultiplicity\ttile\tk_pred\trecovered\
-             \th_d1\th_founder",
-        );
     }
     writeln!(out, "{}", header)?;
     let na = "NA";
@@ -506,33 +502,7 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
             fmt_score(p3),
         );
         let mut line = base;
-        if hor_enabled {
-            let hc = hor_classify(r, &hor_cfg);
-            let f = hc
-                .founder_bp
-                .map(|x| x.to_string())
-                .unwrap_or_else(|| na.into());
-            let k = hc
-                .multiplicity
-                .map(|x| x.to_string())
-                .unwrap_or_else(|| na.into());
-            let t = hc
-                .tile_bp
-                .map(|x| x.to_string())
-                .unwrap_or_else(|| na.into());
-            line.push_str(&format!(
-                "\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{}\t{}",
-                hc.verdict.as_str(),
-                f,
-                k,
-                t,
-                hc.family_size,
-                hc.family_score,
-                hc.jitter,
-                hc.reason,
-            ));
-        }
-        if classify_enabled && !use_ml {
+        if classify_enabled {
             let rv = rule_verdicts[idx];
             let fmt_opt = |o: Option<usize>| o.map(|x| x.to_string()).unwrap_or_else(|| na.into());
             let fmt_share =
@@ -544,52 +514,6 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
                 fmt_opt(rv.multiplicity()),
                 fmt_opt(rv.tile()),
                 fmt_share(rv.share()),
-            ));
-            if args.coverage {
-                match coverage_results.get(idx).and_then(|c| c.as_ref()) {
-                    Some(c) => {
-                        line.push_str(&format!(
-                            "\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{}",
-                            c.mean,
-                            c.pass_70,
-                            c.pass_80,
-                            c.pass_90,
-                            c.first_half,
-                            c.second_half,
-                            c.min,
-                            c.max,
-                            c.n_tiles,
-                        ));
-                    }
-                    None => {
-                        // 9 NA fields
-                        line.push_str("\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA");
-                    }
-                }
-            }
-        }
-        if classify_enabled && use_ml {
-            let (feat, verd) = &ml_verdicts[idx];
-            let fmt_opt = |o: &Option<usize>| o.map(|x| x.to_string()).unwrap_or_else(|| na.into());
-            let fmt_h = |v: f64| {
-                if v.is_nan() {
-                    na.to_string()
-                } else {
-                    format!("{:.6}", v)
-                }
-            };
-            line.push_str(&format!(
-                "\t{:.10}\t{:.10}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                verd.hor_score,
-                verd.hor_score_raw,
-                verd.category.as_str(),
-                fmt_opt(&verd.founder),
-                fmt_opt(&verd.multiplicity),
-                fmt_opt(&verd.tile),
-                fmt_opt(&verd.k_pred),
-                verd.recovered,
-                fmt_h(feat.h_d1),
-                fmt_h(feat.h_founder),
             ));
         }
         writeln!(out, "{}", line)?;

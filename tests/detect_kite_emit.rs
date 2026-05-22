@@ -160,31 +160,7 @@ fn kite_emit_periods_then_detect_succeeds() {
     );
 }
 
-#[test]
-fn emit_periods_conflicts_with_use_ml_classifier() {
-    let dir = tempfile::tempdir().unwrap();
-    let kite_tsv = dir.path().join("k.tsv");
-    let periods_tsv = dir.path().join("k.periods.tsv");
-
-    // Clap should reject this combination at parse time (Review-#2).
-    let o = Command::new(kitehor_bin())
-        .arg("kite-periodicity")
-        .arg(smoke_fasta())
-        .arg("-o")
-        .arg(&kite_tsv)
-        .arg("--classify")
-        .arg("--use-ml-classifier")
-        .arg("--emit-periods")
-        .arg(&periods_tsv)
-        .output()
-        .unwrap();
-    assert!(
-        !o.status.success(),
-        "--emit-periods + --use-ml-classifier should be rejected by clap"
-    );
-    let stderr = String::from_utf8_lossy(&o.stderr);
-    assert!(
-        stderr.contains("conflicts") || stderr.contains("cannot be used with"),
-        "expected clap conflict message; got: {stderr}"
-    );
-}
+// Removed: `emit_periods_conflicts_with_use_ml_classifier` — the
+// `--use-ml-classifier` flag was deleted alongside the legacy ML
+// pipeline in P6. There is now only one classifier (`rule_classify`),
+// so no mutually-exclusive combination needs guarding.
