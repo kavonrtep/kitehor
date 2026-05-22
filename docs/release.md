@@ -100,22 +100,29 @@ kitehor --root $PREFIX --path .`. The `test:` block runs `--version`,
 `--help`, and an end-to-end `analyze` on a `kitehor simulate`-built
 synthetic FASTA.
 
-## First release: v0.9.1
+## First release: v0.9.2
 
-v0.9.0 was attempted but the conda job failed at the recipe-render
-step (multi-line `{# … #}` jinja comment that conda-build's parser
-rejected — fixed in `fdf78c2`). v0.9.1 is the first release that
-ships a published conda package.
+v0.9.0 and v0.9.1 attempts both failed at the conda job:
+
+- **v0.9.0**: multi-line `{# … #}` jinja comment in `meta.yaml`
+  that conda-build's parser rejected. Fixed in `fdf78c2`.
+- **v0.9.1**: `{{ stdlib('c') }}` + `{{ compiler('rust') }}` macros
+  expanded to bare placeholders (`c_linux-64`) because conda-forge's
+  variant config wasn't being applied to the build env. Fixed by
+  mirroring the dottir pattern: drop `stdlib('c')`, drop the rust
+  compiler macro, depend on `rust >=1.85` as a plain package.
+
+v0.9.2 is the first release that ships a published conda package.
 
 Pre-flight passed:
 - 352 tests pass, 0 fail (`cargo test --release --locked`).
 - `cargo clippy -- -D warnings` clean.
 - `cargo fmt --check` clean.
-- Local `kitehor --version` reports `0.9.1`.
+- Local `kitehor --version` reports `0.9.2`.
 
 To ship:
 
 ```bash
-git tag v0.9.1
-git push origin v0.9.1
+git tag v0.9.2
+git push origin v0.9.2
 ```

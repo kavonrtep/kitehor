@@ -23,9 +23,8 @@ build:
 
 requirements:
   build:
-    - {{ stdlib('c') }}
     - {{ compiler('c') }}
-    - {{ compiler('rust') }}
+    - rust >=1.85
 
 test:
   commands:
