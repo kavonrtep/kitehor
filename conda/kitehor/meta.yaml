@@ -1,9 +1,7 @@
-{# -----------------------------------------------------------------
- # Version comes from the CI workflow's `KITEHOR_VERSION` env var
- # (set from the parsed tag); defaults to "0.0.0.dev" for ad-hoc
- # local builds. Mirrors the pattern dottir's recipe uses.
- # ----------------------------------------------------------------- #}
 {% set version = environ.get("KITEHOR_VERSION", "0.0.0.dev") %}
+# Version comes from the CI workflow's `KITEHOR_VERSION` env var
+# (set from the parsed tag); defaults to "0.0.0.dev" for ad-hoc
+# local builds. Mirrors the pattern dottir's recipe uses.
 
 package:
   name: kitehor
