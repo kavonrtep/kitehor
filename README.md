@@ -10,24 +10,37 @@ HOR, its multiplicity (`k`), founder + tile periods, whether the
 monomer carries an SSR or internal sub-repeat, and a single
 `combined_class` summarising the structural call.
 
-## Build
+## Install
 
-Requires Rust ≥ 1.85.
+**Conda** (linux-64, from the `petrnovak` channel):
 
 ```bash
-cargo build --release
+conda install -c petrnovak -c conda-forge kitehor
+# or with mamba:
+mamba install -c petrnovak -c conda-forge kitehor
 ```
 
-Binary lands at `target/release/kitehor`. Contributors should also
-install the tracked git hooks so commits/pushes can't ship
-fmt / clippy / test regressions:
+**Pre-built binary** (linux-64): grab the tarball from the
+[latest GitHub release](https://github.com/kavonrtep/kitehor/releases/latest),
+extract, and put `kitehor` on your `PATH`.
+
+**From source** (any platform with Rust ≥ 1.85):
+
+```bash
+git clone https://github.com/kavonrtep/kitehor && cd kitehor
+cargo build --release
+# binary at target/release/kitehor
+```
+
+Contributors building from source should also install the tracked
+git hooks so commits/pushes can't ship fmt / clippy / test
+regressions:
 
 ```bash
 git config core.hooksPath .githooks    # one-time per clone
 ```
 
-See [`docs/release.md`](docs/release.md) for the full release
-runbook.
+See [`docs/release.md`](docs/release.md) for the release runbook.
 
 ## Quick start
 
