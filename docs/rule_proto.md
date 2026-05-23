@@ -78,6 +78,58 @@ kitehor summary-merge   --verdicts <prefix>.verdicts.tsv \
 | hor-validate | `.hor_within_tile.tsv` | 16 |
 | summary-merge | `.summary.tsv` | 32 |
 
+## Optional periodogram bundle (`--periodogram`)
+
+Both `kitehor analyze` and `kitehor kite-periodicity` accept a
+`--periodogram <PATH>` flag that emits a FASTA-like bundle of the
+per-record neighbour-distance histogram. The data mirrors what
+TideCluster keeps in its in-memory `profile_list` (see
+`tarean/kite.R`); kitehor invents a text format because TideCluster only
+persists the same data as a binary `peaks_list.RDS`.
+
+Format — two records per input sequence:
+
+```text
+>case_id|H length=<N> kmer=<K>
+<H[1]> <H[2]> ... <H[N]>
+>case_id|bg length=<N> kmer=<K>
+<bg[1]> <bg[2]> ... <bg[N]>
+```
+
+- `|H` is the raw neighbour-distance histogram (integer counts, formatted
+  without a decimal point).
+- `|bg` is the smoothed, composition-matched random background envelope
+  (floats with 6 fractional digits).
+- Each vector covers period `d = 1..N` where `N = length_bp` of the
+  record. Index 0 is unused upstream and not emitted.
+- Header tokens after the record id (`length=`, `kmer=`) are
+  whitespace-separated `key=value` pairs.
+- Records whose array failed kite analysis (e.g. too short) are skipped.
+
+Quick load + plot in Python:
+
+```python
+import numpy as np, matplotlib.pyplot as plt
+def iter_records(path):
+    with open(path) as f:
+        header = None
+        for line in f:
+            line = line.rstrip("\n")
+            if line.startswith(">"):
+                header = line[1:]
+            else:
+                yield header, np.fromstring(line, sep=" ")
+
+curves = {}
+for h, v in iter_records("smoke.periodogram"):
+    case, channel = h.split()[0].split("|")
+    curves.setdefault(case, {})[channel] = v
+case = next(iter(curves))
+plt.plot(curves[case]["H"], label="H")
+plt.plot(curves[case]["bg"], label="bg")
+plt.xlabel("period (bp)"); plt.legend(); plt.title(case); plt.show()
+```
+
 ## Algorithm details
 
 ### `rule-classify`

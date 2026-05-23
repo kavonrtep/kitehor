@@ -48,7 +48,8 @@ fn run_analyze(args: AnalyzeArgs) -> Result<()> {
     cfg.rule.k_max = args.rule_k_max;
     cfg.summary.pure_ssr_pct_threshold = args.pure_ssr_pct_threshold;
     cfg.ssr.ssr_flag_threshold_pct = args.ssr_flag_threshold_pct;
-    let report = kitehor::analyze::run(&args.fasta, &args.out, &cfg)?;
+    let report =
+        kitehor::analyze::run_with(&args.fasta, &args.out, &cfg, args.periodogram.as_deref())?;
     info!(
         "analyze: {} record(s) — hor={} simple_tr={} unresolved={}",
         report.n_records, report.n_hor, report.n_tr, report.n_unresolved
@@ -365,10 +366,6 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
         info!("loaded {} records from {:?}", recs.len(), path);
         loaded.extend(recs);
     }
-    let dump_dir = args.dump_profile.clone();
-    if let Some(ref d) = dump_dir {
-        std::fs::create_dir_all(d)?;
-    }
 
     let ok_records: Vec<&kitehor::sequence::ArrayRecord> = loaded
         .iter()
@@ -380,25 +377,13 @@ fn run_kite_periodicity(args: KitePeriodicityArgs) -> Result<()> {
 
     let results: Vec<kitehor::kite::KiteResult> = ok_records
         .par_iter()
-        .map(|rec| kite_analyze(rec, &cfg, dump_dir.is_some()))
+        .map(|rec| kite_analyze(rec, &cfg))
         .collect();
 
-    if let Some(dir) = &dump_dir {
-        for r in &results {
-            if let (Some(profile), Some(bg)) = (&r.profile, &r.background) {
-                let mut p = dir.clone();
-                p.push(format!("{}.kite.tsv", r.array_id));
-                let mut fh =
-                    std::fs::File::create(&p).with_context(|| format!("creating {:?}", &p))?;
-                writeln!(fh, "d\tH\tbg")?;
-                let n = profile.len().min(bg.len());
-                for d in 0..n {
-                    if profile[d] > 0.0 || bg[d] > 0.0 {
-                        writeln!(fh, "{}\t{:.4}\t{:.4}", d, profile[d], bg[d])?;
-                    }
-                }
-            }
-        }
+    if let Some(path) = args.periodogram.as_ref() {
+        let n = kitehor::periodogram::write_periodogram_bundle(path, &results, &cfg)
+            .with_context(|| format!("writing periodogram bundle to {:?}", path))?;
+        info!("periodogram: wrote {} record(s) to {:?}", n, path);
     }
 
     // --- HOR classification (rule-based, port of rule_proto.py) ---

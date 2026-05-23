@@ -26,6 +26,7 @@ pub mod sequence;
 
 pub mod kite;
 pub mod monomer_model;
+pub mod periodogram;
 pub mod rule_classify;
 pub mod simulate;
 pub mod simulate_grid;

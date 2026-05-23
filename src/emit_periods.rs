@@ -212,8 +212,8 @@ mod tests {
             array_id: id.to_string(),
             length_bp: 10_000,
             peaks,
-            profile: None,
-            background: None,
+            profile: Vec::new(),
+            background: Vec::new(),
         }
     }
 

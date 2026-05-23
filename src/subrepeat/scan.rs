@@ -238,7 +238,7 @@ fn kite_on_window(rec_id: &str, seq: &[u8], start: usize, end: usize) -> (i64, f
     let win_seq = &seq[start..end];
     let rec = ArrayRecord::from_raw(win_id, win_seq);
     let cfg = KiteConfig::default();
-    let result = kite_analyze(&rec, &cfg, false);
+    let result = kite_analyze(&rec, &cfg);
     if result.peaks.is_empty() {
         return (-1, 0.0);
     }

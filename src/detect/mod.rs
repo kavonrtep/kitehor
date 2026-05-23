@@ -222,7 +222,7 @@ fn auto_periods(loaded: &[LoadedRecord]) -> HashMap<String, Vec<PeriodCandidate>
         .collect();
     let kite_results: Vec<KiteResult> = ok_records
         .par_iter()
-        .map(|rec| kite_analyze(rec, &kite_cfg, /*dump_profile=*/ false))
+        .map(|rec| kite_analyze(rec, &kite_cfg))
         .collect();
     let verdicts: Vec<RuleVerdict> = kite_results
         .iter()

@@ -67,7 +67,7 @@ fn kite_on_window(win_id: String, seq_slice: &[u8]) -> Vec<KitePeakRow> {
     }
     let rec = ArrayRecord::from_raw(win_id, seq_slice);
     let cfg = KiteConfig::default();
-    let result = kite_analyze(&rec, &cfg, false);
+    let result = kite_analyze(&rec, &cfg);
     result
         .peaks
         .into_iter()

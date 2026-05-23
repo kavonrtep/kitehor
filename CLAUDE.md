@@ -168,6 +168,15 @@ for the implementation contract and milestone acceptance gates.
   Writes 8 per-stage TSVs at `/tmp/smoke.*.tsv` plus `.summary.tsv`.
   `combined_class` column on the summary: hor / hor / tr.
 
+- **Optional periodogram bundle**: add
+  `--periodogram /tmp/smoke.periodogram` to either `kite-periodicity`
+  or `analyze` to also emit a FASTA-like dump of the per-record
+  neighbour-distance histogram `H[d]` + smoothed background `bg[d]`
+  for `d = 1..N`. Two records per input sequence (`>id|H`, `>id|bg`);
+  mirrors the data shape TideCluster keeps in its in-memory
+  `profile_list`. Format spec + Python loader snippet:
+  [`docs/rule_proto.md`](docs/rule_proto.md#optional-periodogram-bundle---periodogram).
+
 - **Full benchmark**: regenerate `ground_truth/sequences.fasta` from
   `ground_truth/params.tsv` (1,600 cases) before running the classifier
   on it — those files are not committed.

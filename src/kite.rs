@@ -62,13 +62,16 @@ pub struct KiteResult {
     pub length_bp: usize,
     /// Filtered peaks, sorted by score desc. Empty when no peak survives.
     pub peaks: Vec<KitePeak>,
-    /// Optional full H[d] (size L+1; H[0] unused).
-    pub profile: Option<Vec<f64>>,
-    /// Optional background envelope.
-    pub background: Option<Vec<f64>>,
+    /// Full neighbour-distance histogram H[d], length `L + 1` (index 0
+    /// unused, index d carries the count for distance d bp). Always
+    /// populated; consumers that only need peaks can ignore it.
+    pub profile: Vec<f64>,
+    /// Smoothed, composition-matched random background envelope, same
+    /// shape as `profile`. Always populated.
+    pub background: Vec<f64>,
 }
 
-pub fn analyze(record: &ArrayRecord, cfg: &KiteConfig, dump_profile: bool) -> KiteResult {
+pub fn analyze(record: &ArrayRecord, cfg: &KiteConfig) -> KiteResult {
     let l = record.length;
     let k = cfg.k;
     if l < k + 2 {
@@ -76,8 +79,8 @@ pub fn analyze(record: &ArrayRecord, cfg: &KiteConfig, dump_profile: bool) -> Ki
             array_id: record.id.clone(),
             length_bp: l,
             peaks: Vec::new(),
-            profile: if dump_profile { Some(Vec::new()) } else { None },
-            background: if dump_profile { Some(Vec::new()) } else { None },
+            profile: Vec::new(),
+            background: Vec::new(),
         };
     }
     let profile = compute_neighbor_profile(&record.seq, k, l);
@@ -100,8 +103,8 @@ pub fn analyze(record: &ArrayRecord, cfg: &KiteConfig, dump_profile: bool) -> Ki
         array_id: record.id.clone(),
         length_bp: l,
         peaks,
-        profile: if dump_profile { Some(profile) } else { None },
-        background: if dump_profile { Some(background) } else { None },
+        profile,
+        background,
     }
 }
 
@@ -371,10 +374,9 @@ fn find_peaks_with_score(
     peaks
 }
 
-/// Convenience wrapper for parallel processing over a record set. Drops
-/// any per-record dump-profile data; use `analyze` directly when needed.
+/// Convenience wrapper for parallel processing over a record set.
 pub fn analyze_records(records: &[ArrayRecord], cfg: &KiteConfig) -> Vec<KiteResult> {
-    records.par_iter().map(|r| analyze(r, cfg, false)).collect()
+    records.par_iter().map(|r| analyze(r, cfg)).collect()
 }
 
 #[cfg(test)]
@@ -416,7 +418,7 @@ mod tests {
         let seq = tandem(&monomer, 100);
         let rec = make_record("test", &seq);
         let cfg = KiteConfig::default();
-        let res = analyze(&rec, &cfg, false);
+        let res = analyze(&rec, &cfg);
         assert!(!res.peaks.is_empty(), "no peaks found");
         let top = res.peaks[0].period;
         assert!(
@@ -445,7 +447,7 @@ mod tests {
         }
         let rec = make_record("rand", &seq);
         let cfg = KiteConfig::default();
-        let res = analyze(&rec, &cfg, false);
+        let res = analyze(&rec, &cfg);
         // Either no peaks, or peaks whose top-1 score is very low. We
         // don't enforce zero — kite.R's "fallback to closest-to-bg" can
         // emit a single peak — but the score should be small.

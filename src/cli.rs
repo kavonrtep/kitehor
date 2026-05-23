@@ -139,10 +139,16 @@ pub struct KitePeriodicityArgs {
     #[arg(long)]
     pub bg_sigma: Option<f64>,
 
-    /// Optional: write per-record `H[d]` + `bg[d]` profiles to this
-    /// directory as `<case_id>.kite.tsv` (large output; off by default).
-    #[arg(long)]
-    pub dump_profile: Option<PathBuf>,
+    /// Optional: write a FASTA-like periodogram bundle to this path.
+    /// Each input record produces two lines: a `>case_id|H` header
+    /// followed by the dense neighbour-distance histogram (one integer
+    /// per period 1..N), and a `>case_id|bg` header followed by the
+    /// composition-matched random background envelope (one float per
+    /// period). Mirrors the data shape TideCluster keeps in its
+    /// in-memory `profile_list` (see `tarean/kite.R`); useful for
+    /// plotting periodograms with any text-aware tool. Off by default.
+    #[arg(long, value_name = "PATH")]
+    pub periodogram: Option<PathBuf>,
 
     /// Optional: long-format peaks TSV (one row per kept peak per
     /// record). Defaults to `<out>.peaks.tsv` when omitted.
@@ -442,6 +448,12 @@ pub struct AnalyzeArgs {
     pub pure_ssr_pct_threshold: f64,
     #[arg(long, default_value_t = 30.0)]
     pub ssr_flag_threshold_pct: f64,
+
+    /// Optional: write a FASTA-like periodogram bundle alongside the
+    /// per-stage TSVs (same format as `kitehor kite-periodicity
+    /// --periodogram`). Off by default.
+    #[arg(long, value_name = "PATH")]
+    pub periodogram: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------

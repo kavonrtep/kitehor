@@ -40,6 +40,17 @@ pub struct Report {
 
 /// Run the full pipeline.
 pub fn run(fasta: &Path, out_prefix: &Path, cfg: &Config) -> Result<Report> {
+    run_with(fasta, out_prefix, cfg, None)
+}
+
+/// Run the full pipeline, optionally writing a FASTA-like periodogram
+/// bundle to `periodogram_path`.
+pub fn run_with(
+    fasta: &Path,
+    out_prefix: &Path,
+    cfg: &Config,
+    periodogram_path: Option<&Path>,
+) -> Result<Report> {
     use crate::sequence::ArrayRecord;
 
     // 1. FASTA → records.
@@ -57,9 +68,18 @@ pub fn run(fasta: &Path, out_prefix: &Path, cfg: &Config) -> Result<Report> {
     // 2. Kite (parallel over records).
     let kite_results: Vec<crate::kite::KiteResult> = array_records
         .par_iter()
-        .map(|r| crate::kite::analyze(r, &cfg.kite, false))
+        .map(|r| crate::kite::analyze(r, &cfg.kite))
         .collect();
     write_kite_outputs(out_prefix, &kite_results)?;
+    if let Some(path) = periodogram_path {
+        let n = crate::periodogram::write_periodogram_bundle(path, &kite_results, &cfg.kite)
+            .with_context(|| format!("writing periodogram bundle to {:?}", path))?;
+        log::info!(
+            "analyze: periodogram bundle wrote {} record(s) to {:?}",
+            n,
+            path
+        );
+    }
 
     // 3. Rule-classify.
     let verdicts: Vec<crate::rule_classify::Verdict> = kite_results
