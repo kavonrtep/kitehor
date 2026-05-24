@@ -149,18 +149,28 @@ jobs:
             cat "$f" >> SHA256SUMS
           done
           ls -la
-      - name: Create GitHub release
+      - name: Create or update GitHub release
+        # Idempotent: a re-run of the workflow (e.g. via
+        # workflow_dispatch after a downstream `conda` job failure)
+        # must not blow up because the release already exists. If the
+        # release is there, just re-upload the assets with --clobber.
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           tag="${{ needs.check-tag.outputs.tag }}"
-          gh release create "$tag" \
-            --title "$tag" \
-            --generate-notes \
-            --verify-tag \
-            ./dist/*.tar.gz ./dist/SHA256SUMS
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag exists; replacing assets via --clobber"
+            gh release upload "$tag" --clobber \
+              ./dist/*.tar.gz ./dist/SHA256SUMS
+          else
+            gh release create "$tag" \
+              --title "$tag" \
+              --generate-notes \
+              --verify-tag \
+              ./dist/*.tar.gz ./dist/SHA256SUMS
+          fi
 
   # ────────────────────────────────────────────────────────────────────
   # 4. Conda — build linux-64 package and upload to the petrnovak
@@ -196,24 +206,36 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # The image ships conda + conda-build pre-installed. Anything
-          # the recipe needs (rust, gcc, the sysroot) is pulled into the
-          # build env by `conda build` itself.
+          # The image ships conda + conda-build pre-installed and runs
+          # as user `conda` (UID 9001). Two side effects to handle:
+          #
+          # 1. The image's activation chdirs back into $HOME =
+          #    /home/conda regardless of `-w /workspace`, so we have to
+          #    `cd /workspace` explicitly inside the script. Without
+          #    this, conda-build looks for the recipe under
+          #    /home/conda/conda/kitehor/ and exits with
+          #    "No valid recipes found".
+          # 2. The runner workspace is owned by UID 1001 (runner) and
+          #    mode 0755 — UID 9001 inside the container can read it
+          #    but can't create new files under it. Pre-create
+          #    conda-out with mode 0777 so the in-container build can
+          #    drop the .conda artefact there.
+          mkdir -p conda-out
+          chmod 0777 conda-out
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
-            -w /workspace \
             -e KITEHOR_VERSION \
             quay.io/condaforge/linux-anvil-cos7-x86_64 \
             bash -lc '
               set -euo pipefail
+              cd /workspace
               conda build conda/kitehor/ \
                 --output-folder conda-out \
                 -c conda-forge
             '
-          # The docker daemon writes as root inside the container; the
-          # runner user can read but not delete those files. Reclaim
-          # ownership so subsequent upload-artifact / shutil cleanup
-          # don't trip on root-owned paths.
+          # Files written by UID 9001 inside the container show up on
+          # the runner with that ownership; chown back so subsequent
+          # upload-artifact / cleanup steps don't trip.
           sudo chown -R "$(id -u):$(id -g)" conda-out
       - uses: conda-incubator/setup-miniconda@v3
         with:
