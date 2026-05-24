@@ -128,19 +128,33 @@ The v0.9.2 conda package builds and uploads cleanly, but the resulting
 binary inherits the runner's glibc 2.35 symbols and won't run on any
 host with glibc < 2.34 (Ubuntu 20.04, CentOS 8, Debian 11). Reported in
 [`docs/kitehor_upstream_issues.md`](kitehor_upstream_issues.md). The
-next release ships the fix: the `conda` job now runs `conda build`
-inside `quay.io/condaforge/linux-anvil-cos7-x86_64` (CentOS 7,
-glibc 2.17). No recipe changes; the build env is unchanged otherwise.
+v0.9.3 release ships the fix.
+
+## v0.9.3 — first portable conda binary
+
+Behaviour-equivalent to v0.9.2 plus:
+
+- **fix(conda)**: the `conda` job now runs `conda build` inside
+  `quay.io/condaforge/linux-anvil-cos7-x86_64` (CentOS 7, glibc 2.17),
+  the canonical conda-forge build env. No recipe changes — only the
+  build host. Resulting binary is portable across every current LTS
+  distro (Ubuntu 20.04 / Debian 11 / CentOS 8 / RHEL 8 and newer).
+- **feat(kite)**: `kite-periodicity` and `analyze` gain
+  `--periodogram <PATH>` — a FASTA-like bundle of the per-record
+  neighbour-distance histogram + smoothed background for plotting
+  (mirrors TideCluster's in-memory `profile_list`). The previous
+  `--dump-profile <DIR>` flag (per-record sparse TSVs) is removed.
 
 Pre-flight passed:
-- 352 tests pass, 0 fail (`cargo test --release --locked`).
+- 288 unit + 60+ integration tests pass (`cargo test --release --locked`).
 - `cargo clippy -- -D warnings` clean.
 - `cargo fmt --check` clean.
-- Local `kitehor --version` reports `0.9.2`.
+- Local `kitehor --version` reports `0.9.3`.
 
 To ship:
 
 ```bash
-git tag v0.9.2
-git push origin v0.9.2
+git tag v0.9.3
+git push origin main
+git push origin v0.9.3
 ```
