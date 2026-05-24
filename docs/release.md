@@ -42,7 +42,15 @@ The push of the tag triggers `release.yml`:
 4. **`conda`** — `conda build conda/kitehor/ --output-folder
    conda-out` (with `KITEHOR_VERSION=0.9.X`), then
    `anaconda upload --user petrnovak --label main --force` the
-   resulting `linux-64/kitehor-*.conda` (or `.tar.bz2`).
+   resulting `linux-64/kitehor-*.conda` (or `.tar.bz2`). The build
+   step runs inside conda-forge's
+   `quay.io/condaforge/linux-anvil-cos7-x86_64` docker image
+   (CentOS 7, glibc 2.17) so the resulting binary stays portable
+   across all current LTS distros — Ubuntu 20.04, CentOS / RHEL 8,
+   Debian 11. Running `cargo install` directly on the `ubuntu-22.04`
+   runner pulls in glibc 2.35 symbols (`GLIBC_2.32` / `2.33` / `2.34`
+   refs) that break on anything older — that's what bit v0.9.2; see
+   [`docs/kitehor_upstream_issues.md`](kitehor_upstream_issues.md).
 
 ## Secrets required
 
@@ -113,6 +121,16 @@ v0.9.0 and v0.9.1 attempts both failed at the conda job:
   compiler macro, depend on `rust >=1.85` as a plain package.
 
 v0.9.2 is the first release that ships a published conda package.
+
+### v0.9.2 — glibc-too-new follow-up
+
+The v0.9.2 conda package builds and uploads cleanly, but the resulting
+binary inherits the runner's glibc 2.35 symbols and won't run on any
+host with glibc < 2.34 (Ubuntu 20.04, CentOS 8, Debian 11). Reported in
+[`docs/kitehor_upstream_issues.md`](kitehor_upstream_issues.md). The
+next release ships the fix: the `conda` job now runs `conda build`
+inside `quay.io/condaforge/linux-anvil-cos7-x86_64` (CentOS 7,
+glibc 2.17). No recipe changes; the build env is unchanged otherwise.
 
 Pre-flight passed:
 - 352 tests pass, 0 fail (`cargo test --release --locked`).

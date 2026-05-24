@@ -117,6 +117,22 @@ kitehor kite-periodicity input.fasta -o predictions.tsv --classify
 
 Same classifier as `rule-classify`; convenience for single-step usage.
 
+### `--periodogram` (FASTA-like dump for plotting)
+
+Both `analyze` and `kite-periodicity` accept `--periodogram <PATH>` to
+write a FASTA-like bundle of the per-record neighbour-distance
+histogram `H[d]` and smoothed background `bg[d]` for `d = 1..N`, two
+records per input sequence (`>id|H`, `>id|bg`). Mirrors the data shape
+TideCluster keeps in its in-memory `profile_list` so it can drive any
+plotter directly.
+
+```bash
+kitehor kite-periodicity input.fasta -o out.tsv --periodogram out.periodogram
+```
+
+Format spec + Python loader snippet:
+[`docs/rule_proto.md`](docs/rule_proto.md#optional-periodogram-bundle---periodogram).
+
 ## v2 line-width detector
 
 A separate, sequence-agnostic threshold-rule classifier that operates
