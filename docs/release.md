@@ -130,6 +130,74 @@ host with glibc < 2.34 (Ubuntu 20.04, CentOS 8, Debian 11). Reported in
 [`docs/kitehor_upstream_issues.md`](kitehor_upstream_issues.md). The
 v0.9.3 release ships the fix.
 
+## v0.10.0 — unified tandem_validate stage (breaking)
+
+**Breaking release.** The CLI surface lost two subcommands and one
+`combined_class` value; the `summary.tsv` schema lost nine columns and
+gained ten. Pipelines pinning v0.9.x output formats need to be updated
+before adopting v0.10.0.
+
+What it ships:
+
+- **feat(tandem_validate)**: unified spatial-localization subrepeat
+  detector — port of `tools/rule_proto/tandem_validate.py` (spec v5).
+  One density + spatial- + phase-contrast check replaces the prior
+  two-stage `subrepeat-scan` + `hor-validate` pair, testing both
+  within-tile and array-scale heterogeneity at one geometric scale
+  (window capped at host, candidates capped at `host/3`). New
+  `kitehor tandem-validate` subcommand exposes all 13 thresholds as
+  flags. See `docs/new/tandem_validate_spec.md` for the algorithm
+  and `docs/new/tandem_validate_port_plan.md` for the rollout plan.
+- **refactor(analyze)**: pipeline collapses from 5 → 4 post-classify
+  stages and the cascade from 8 → 7 classes (`tr_with_nested_tr`
+  retired; both prior subrepeat-style triggers merge into
+  `tr_with_subrepeat`). The `analyze` orchestrator now writes 7
+  per-stage TSVs instead of 9. Net diff: −1402 LOC after deleting
+  `src/subrepeat/` and `src/hor_validate/`.
+- **test(tandem_validate)**: ignored-by-default Python-parity test
+  (`tests/tandem_validate_python_parity.rs`) — runs both the Rust
+  and Python implementations on a 6-record synthetic fixture and
+  asserts `decision_hint` matches. Run before tagging via
+  `cargo test --release --test tandem_validate_python_parity -- --ignored`.
+- **docs**: README, CLAUDE.md, and `docs/rule_proto.md` updated for
+  the 7-stage / 7-class layout. `docs/new/rule_proto_impl_plan.md`
+  retains the original port intent but carries a "Historical
+  document — partially superseded by v0.10" header at the top.
+- **fix(ci)**: cos7 conda build now runs from a writable workdir and
+  publishes idempotently (no-op on a re-tag that ships the same
+  `.conda` artifact). Carried over from post-v0.9.3 work.
+
+Breaking changes operators need to know:
+
+- `kitehor subrepeat-scan` and `kitehor hor-validate` subcommands
+  removed.
+- `kitehor summary-merge` — `--subrepeat` and `--within-tile` flags
+  replaced by a single `--tandem-validate`.
+- `tr_with_nested_tr` is no longer a possible `combined_class`
+  value (semantically equivalent records now fire
+  `tr_with_subrepeat`; some former `tr_with_nested_tr` records
+  legitimately fall through to `tr` or `unresolved` per the v5
+  out-of-scope list in the spec).
+- `summary.tsv`: drops `length_bp`, all `subrepeat_*` columns, and
+  all `density_hint` / `founder_density` / `phase_contrast` /
+  `density_n_windows` columns. Gains 10 `tv_*` columns from the new
+  detector. Join on `record_id` against `<prefix>.kite.tsv` if you
+  need `length_bp`.
+
+Pre-flight passed:
+- 374 unit + integration tests pass, 3 ignored (`cargo test --release --locked`).
+- `cargo clippy --release --all-targets --locked --no-deps -- -D warnings` clean.
+- `cargo fmt --all --check` clean.
+- Local `kitehor --version` reports `0.10.0`.
+
+To ship:
+
+```bash
+git tag v0.10.0
+git push origin main
+git push origin v0.10.0
+```
+
 ## v0.9.3 — first portable conda binary
 
 Behaviour-equivalent to v0.9.2 plus:
