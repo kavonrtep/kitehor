@@ -64,23 +64,14 @@ pub enum Command {
     /// `tools/rule_proto/ssr_scan.py`. Emits `<prefix>.ssr.tsv` and
     /// `<prefix>.ssr.regions.tsv`.
     SsrScan(SsrScanArgs),
-    /// Spatial alternation scanner for nested-TR detection (port of
-    /// `tools/rule_proto/subrepeat_scan.py`). Emits
-    /// `<prefix>.subrepeat.tsv` and `<prefix>.windows.tsv`.
-    SubrepeatScan(SubrepeatScanArgs),
-    /// Within-tile + spatial density HOR validator (port of
-    /// `tools/rule_proto/hor_within_tile_check.py`). Emits
-    /// `<prefix>.hor_within_tile.tsv`.
-    HorValidate(HorValidateArgs),
     /// Unified spatial-localization subrepeat detector (port of
-    /// `tools/rule_proto/tandem_validate.py`, spec v5). Replaces
-    /// `subrepeat-scan` + `hor-validate` in the rule-proto pipeline.
-    /// Emits `<prefix>.tandem_validate.tsv`.
+    /// `tools/rule_proto/tandem_validate.py`, spec v5). Replaces the
+    /// older `subrepeat-scan` + `hor-validate` stages in the rule-proto
+    /// pipeline. Emits `<prefix>.tandem_validate.tsv`.
     TandemValidate(TandemValidateArgs),
     /// End-to-end pipeline. Runs kite-periodicity → rule-classify →
-    /// (subrepeat-scan ‖ ssr-scan ‖ hor-validate) → summary-merge on
-    /// one FASTA. Always emits every per-stage TSV under
-    /// `<prefix>.*.tsv`.
+    /// (tandem-validate ‖ ssr-scan) → summary-merge on one FASTA.
+    /// Always emits every per-stage TSV under `<prefix>.*.tsv`.
     Analyze(AnalyzeArgs),
 }
 
@@ -433,10 +424,9 @@ pub struct RuleClassifyArgs {
 pub struct AnalyzeArgs {
     /// Input FASTA.
     pub fasta: PathBuf,
-    /// Output prefix. Writes 8 TSVs: `<prefix>.kite.tsv`,
-    /// `.kite.peaks.tsv`, `.verdicts.tsv`, `.subrepeat.tsv`,
-    /// `.windows.tsv`, `.ssr.tsv`, `.ssr.regions.tsv`,
-    /// `.hor_within_tile.tsv`, `.summary.tsv`.
+    /// Output prefix. Writes 6 TSVs: `<prefix>.kite.tsv`,
+    /// `.kite.peaks.tsv`, `.verdicts.tsv`, `.tandem_validate.tsv`,
+    /// `.ssr.tsv`, `.ssr.regions.tsv`, `.summary.tsv`.
     #[arg(short, long, required = true)]
     pub out: PathBuf,
     /// Number of rayon worker threads (0 = auto).
@@ -459,91 +449,6 @@ pub struct AnalyzeArgs {
     /// --periodogram`). Off by default.
     #[arg(long, value_name = "PATH")]
     pub periodogram: Option<PathBuf>,
-}
-
-// ---------------------------------------------------------------------------
-// subrepeat-scan
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Args)]
-pub struct SubrepeatScanArgs {
-    /// Input FASTA.
-    pub fasta: PathBuf,
-    /// Output prefix.
-    #[arg(short, long, required = true)]
-    pub out: PathBuf,
-    /// Required kite peaks TSV (long-format) for candidate selection.
-    /// In the orchestrator (`analyze`), wired from kite-periodicity
-    /// output automatically.
-    #[arg(long, required = true)]
-    pub kite_peaks: PathBuf,
-    #[arg(long, default_value_t = 0.05)]
-    pub tol: f64,
-    #[arg(long, default_value_t = 5)]
-    pub window_mult_sub: usize,
-    #[arg(long, default_value_t = 4)]
-    pub step_frac: usize,
-    #[arg(long, default_value_t = 3)]
-    pub top_n_sub: usize,
-    #[arg(long, default_value_t = 10)]
-    pub top_n_host: usize,
-    #[arg(long, default_value_t = 0.05)]
-    pub sub_floor: f64,
-    #[arg(long, default_value_t = 0.3)]
-    pub window_score_floor: f64,
-    #[arg(long, default_value_t = 3)]
-    pub min_run: usize,
-    #[arg(long, default_value_t = 3)]
-    pub host_sub_ratio_min: usize,
-    #[arg(long, default_value_t = 1000)]
-    pub min_window_bp: usize,
-}
-
-// ---------------------------------------------------------------------------
-// hor-validate
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Args)]
-pub struct HorValidateArgs {
-    /// Input FASTA.
-    pub fasta: PathBuf,
-    /// rule-classify verdicts TSV.
-    #[arg(long, required = true)]
-    pub verdicts: PathBuf,
-    /// Global kite peaks TSV (long-format).
-    #[arg(long, required = true)]
-    pub global_peaks: PathBuf,
-    /// Output prefix.
-    #[arg(short, long, required = true)]
-    pub out: PathBuf,
-    #[arg(long, default_value_t = 0.02)]
-    pub period_match_tol: f64,
-    #[arg(long, default_value_t = 4)]
-    pub min_k_for_density: u32,
-    #[arg(long, default_value_t = 3)]
-    pub density_window_tile_frac: usize,
-    #[arg(long, default_value_t = 3)]
-    pub min_founder_mult: usize,
-    #[arg(long, default_value_t = 200)]
-    pub min_density_window_bp: usize,
-    #[arg(long, default_value_t = 1000)]
-    pub max_density_windows: usize,
-    #[arg(long, default_value_t = 0.2)]
-    pub density_rel_floor: f64,
-    #[arg(long, default_value_t = 10)]
-    pub phase_fold_bins: usize,
-    #[arg(long, default_value_t = 0.35)]
-    pub density_dup_max: f64,
-    #[arg(long, default_value_t = 0.7)]
-    pub density_hor_min: f64,
-    #[arg(long, default_value_t = 0.4)]
-    pub phase_contrast_dup_min: f64,
-    #[arg(long, default_value_t = 0.15)]
-    pub phase_contrast_hor_max: f64,
-    #[arg(long, default_value_t = 200_000)]
-    pub max_tile_bp: usize,
-    #[arg(long, default_value_t = 200)]
-    pub min_window_bp: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -658,17 +563,12 @@ pub struct SummaryMergeArgs {
     /// rule-classify verdicts TSV (`case_id` column).
     #[arg(long, required = true)]
     pub verdicts: PathBuf,
-    /// subrepeat-scan TSV (`record_id` column).
+    /// tandem-validate TSV (`record_id` column).
     #[arg(long, required = true)]
-    pub subrepeat: PathBuf,
+    pub tandem_validate: PathBuf,
     /// ssr-scan TSV (`record_id` column).
     #[arg(long, required = true)]
     pub ssr: PathBuf,
-    /// Optional hor-validate TSV. When supplied, `density_hint =
-    /// localized_duplication` rows fire `combined_class =
-    /// tr_with_subrepeat`.
-    #[arg(long)]
-    pub within_tile: Option<PathBuf>,
     /// Output prefix. Writes `<prefix>.summary.tsv`.
     #[arg(short, long, required = true)]
     pub out: PathBuf,

@@ -1,10 +1,16 @@
-//! Pipeline merger — port of `tools/rule_proto/summary.py`.
+//! Pipeline merger — port of `tools/rule_proto/summary_unified.py`.
 //!
-//! Joins verdicts.tsv + subrepeat.tsv + ssr.tsv (+ optional
-//! hor_within_tile.tsv) on `record_id` (verdicts uses `case_id`, renamed
-//! here). Applies the eight-rule first-match-wins decision tree to
-//! produce `combined_class`. Output is one row per record with 28–32
-//! columns at `%.4g` float precision.
+//! Joins verdicts.tsv + tandem_validate.tsv + ssr.tsv on `record_id`
+//! (verdicts uses `case_id`, renamed here). Applies the seven-rule
+//! first-match-wins decision tree to produce `combined_class`. Output
+//! is one row per record with the merged column set at `%.4g` float
+//! precision.
+//!
+//! Cascade compared to the prior 8-class merger:
+//! * `tr_with_nested_tr` is retired (merged into `tr_with_subrepeat`).
+//! * The two subrepeat-style triggers (subrepeat-scan's `blocks+non_sub`
+//!   flag and hor-validate's `localized_duplication` hint) collapse to
+//!   a single `tandem_validate decision == localized_subrepeat`.
 
 pub mod io;
 
@@ -25,23 +31,25 @@ impl Default for Config {
     }
 }
 
-/// Apply the 8-rule decision tree (first-match-wins). Mirrors
-/// `summary.py::combined_class`.
+/// Apply the 7-rule decision tree (first-match-wins). Mirrors
+/// `summary_unified.py::combined_class`.
+///
+/// `tv_decision` is the `decision_hint` column from `tandem_validate.tsv`.
+/// Only `localized_subrepeat` drives the `tr_with_subrepeat` class; any
+/// other value (`confirms_host`, `ambiguous`, `no_signal`, `no_candidates`,
+/// `no_windows`, `skip_k2`, `no_host`, `no_verdict`) lets the cascade
+/// fall through to the verdict's natural class.
 pub fn combined_class(
     hor_verdict: &str,
     ssr_flag: &str,
     ssr_dom_pct: f64,
-    subrep_flag: &str,
-    density_hint: &str,
+    tv_decision: &str,
     cfg: &Config,
 ) -> &'static str {
     if ssr_flag == "yes" && ssr_dom_pct >= cfg.pure_ssr_pct_threshold {
         return "pure_ssr";
     }
-    if subrep_flag == "yes" {
-        return "tr_with_nested_tr";
-    }
-    if hor_verdict == "hor" && density_hint == "localized_duplication" {
+    if tv_decision == "localized_subrepeat" {
         return "tr_with_subrepeat";
     }
     if hor_verdict == "hor" && ssr_flag == "yes" {
@@ -62,13 +70,12 @@ pub fn combined_class(
 /// Subcommand entry point: read inputs, merge, write `<prefix>.summary.tsv`.
 pub fn run_subcommand(
     verdicts: &Path,
-    subrepeat: &Path,
+    tandem_validate: &Path,
     ssr: &Path,
-    within_tile: Option<&Path>,
     out_prefix: &Path,
     cfg: &Config,
 ) -> Result<usize> {
-    let merged = io::merge_inputs(verdicts, subrepeat, ssr, within_tile, cfg)?;
+    let merged = io::merge_inputs(verdicts, tandem_validate, ssr, cfg)?;
     let n = merged.rows.len();
     let path = io::summary_path(out_prefix);
     io::write_summary(&path, &merged)?;
@@ -79,68 +86,106 @@ pub fn run_subcommand(
 mod tests {
     use super::*;
 
+    fn cfg() -> Config {
+        Config::default()
+    }
+
     #[test]
     fn pure_ssr_fires_above_threshold() {
-        let cfg = Config::default();
         assert_eq!(
-            combined_class("hor", "yes", 85.0, "no", "", &cfg),
+            combined_class("hor", "yes", 85.0, "no_candidates", &cfg()),
             "pure_ssr"
         );
     }
 
     #[test]
-    fn nested_tr_beats_hor() {
-        let cfg = Config::default();
+    fn pure_ssr_outranks_subrepeat() {
+        // A record with both high SSR coverage AND a localized subrepeat
+        // signal is classified pure_ssr — the SSR rule comes first.
         assert_eq!(
-            combined_class("hor", "no", 0.0, "yes", "spatially_confirms_hor", &cfg),
-            "tr_with_nested_tr"
+            combined_class("hor", "yes", 90.0, "localized_subrepeat", &cfg()),
+            "pure_ssr"
         );
     }
 
     #[test]
-    fn tr_with_subrepeat_via_within_tile() {
-        let cfg = Config::default();
+    fn subrepeat_beats_hor() {
         assert_eq!(
-            combined_class("hor", "no", 0.0, "no", "localized_duplication", &cfg),
+            combined_class("hor", "no", 0.0, "localized_subrepeat", &cfg()),
             "tr_with_subrepeat"
         );
     }
 
     #[test]
-    fn hor_with_ssr_below_pure_threshold() {
-        let cfg = Config::default();
+    fn subrepeat_beats_simple_tr() {
         assert_eq!(
-            combined_class("hor", "yes", 50.0, "no", "", &cfg),
+            combined_class("simple_tr", "no", 0.0, "localized_subrepeat", &cfg()),
+            "tr_with_subrepeat"
+        );
+    }
+
+    #[test]
+    fn confirms_host_falls_through_to_hor() {
+        // The unified detector says the tile is confirmed — fall through
+        // to the verdict's natural class.
+        assert_eq!(
+            combined_class("hor", "no", 0.0, "confirms_host", &cfg()),
+            "hor"
+        );
+    }
+
+    #[test]
+    fn hor_with_ssr_below_pure_threshold() {
+        assert_eq!(
+            combined_class("hor", "yes", 50.0, "no_candidates", &cfg()),
             "hor_with_ssr"
         );
     }
 
     #[test]
     fn plain_hor() {
-        let cfg = Config::default();
-        assert_eq!(combined_class("hor", "no", 0.0, "no", "", &cfg), "hor");
+        assert_eq!(
+            combined_class("hor", "no", 0.0, "no_candidates", &cfg()),
+            "hor"
+        );
     }
 
     #[test]
     fn tr_with_ssr() {
-        let cfg = Config::default();
         assert_eq!(
-            combined_class("simple_tr", "yes", 30.0, "no", "", &cfg),
+            combined_class("simple_tr", "yes", 30.0, "no_candidates", &cfg()),
             "tr_with_ssr"
         );
     }
 
     #[test]
     fn plain_tr() {
-        let cfg = Config::default();
-        assert_eq!(combined_class("simple_tr", "no", 0.0, "no", "", &cfg), "tr");
+        assert_eq!(
+            combined_class("simple_tr", "no", 0.0, "no_candidates", &cfg()),
+            "tr"
+        );
+    }
+
+    #[test]
+    fn skip_k2_falls_through_to_hor() {
+        // HOR k=2 records skip the detector entirely; cascade should
+        // still call them hor.
+        assert_eq!(combined_class("hor", "no", 0.0, "skip_k2", &cfg()), "hor");
+    }
+
+    #[test]
+    fn ambiguous_falls_through() {
+        assert_eq!(combined_class("hor", "no", 0.0, "ambiguous", &cfg()), "hor");
+        assert_eq!(
+            combined_class("simple_tr", "no", 0.0, "ambiguous", &cfg()),
+            "tr"
+        );
     }
 
     #[test]
     fn unresolved_default() {
-        let cfg = Config::default();
         assert_eq!(
-            combined_class("unresolved", "no", 0.0, "no", "", &cfg),
+            combined_class("unresolved", "no", 0.0, "no_candidates", &cfg()),
             "unresolved"
         );
     }

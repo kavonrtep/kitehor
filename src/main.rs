@@ -3,9 +3,9 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use kitehor::cli::{
-    AnalyzeArgs, Cli, Command, DetectArgs, DetectBatchArgs, HorValidateArgs, KitePeriodicityArgs,
-    RuleClassifyArgs, SimulateArgs, SimulateGridArgs, SsrScanArgs, SubrepeatScanArgs,
-    SummaryMergeArgs, SynthArgs, SynthBatchArgs, SynthValidateArgs, TandemValidateArgs,
+    AnalyzeArgs, Cli, Command, DetectArgs, DetectBatchArgs, KitePeriodicityArgs, RuleClassifyArgs,
+    SimulateArgs, SimulateGridArgs, SsrScanArgs, SummaryMergeArgs, SynthArgs, SynthBatchArgs,
+    SynthValidateArgs, TandemValidateArgs,
 };
 use kitehor::io::{load_fasta, LoadQc, LoadStatus};
 use kitehor::kite::{analyze as kite_analyze, KiteConfig};
@@ -29,8 +29,6 @@ fn main() -> Result<()> {
         Command::RuleClassify(args) => run_rule_classify(args),
         Command::SummaryMerge(args) => run_summary_merge(args),
         Command::SsrScan(args) => run_ssr_scan(args),
-        Command::SubrepeatScan(args) => run_subrepeat_scan(args),
-        Command::HorValidate(args) => run_hor_validate(args),
         Command::TandemValidate(args) => run_tandem_validate(args),
         Command::Analyze(args) => run_analyze(args),
     }
@@ -55,52 +53,6 @@ fn run_analyze(args: AnalyzeArgs) -> Result<()> {
         "analyze: {} record(s) — hor={} simple_tr={} unresolved={}",
         report.n_records, report.n_hor, report.n_tr, report.n_unresolved
     );
-    Ok(())
-}
-
-fn run_subrepeat_scan(args: SubrepeatScanArgs) -> Result<()> {
-    let cfg = kitehor::subrepeat::Config {
-        tol: args.tol,
-        window_mult_sub: args.window_mult_sub,
-        step_frac: args.step_frac,
-        top_n_sub: args.top_n_sub,
-        top_n_host: args.top_n_host,
-        sub_floor: args.sub_floor,
-        window_score_floor: args.window_score_floor,
-        min_run: args.min_run,
-        host_sub_ratio_min: args.host_sub_ratio_min,
-        min_window_bp: args.min_window_bp,
-    };
-    let n = kitehor::subrepeat::run_subcommand(&args.fasta, &args.out, &args.kite_peaks, &cfg)?;
-    info!("subrepeat-scan: scanned {n} record(s)");
-    Ok(())
-}
-
-fn run_hor_validate(args: HorValidateArgs) -> Result<()> {
-    let cfg = kitehor::hor_validate::Config {
-        period_match_tol: args.period_match_tol,
-        min_k_for_density: args.min_k_for_density,
-        density_window_tile_frac: args.density_window_tile_frac,
-        min_founder_mult: args.min_founder_mult,
-        min_density_window_bp: args.min_density_window_bp,
-        max_density_windows: args.max_density_windows,
-        density_rel_floor: args.density_rel_floor,
-        phase_fold_bins: args.phase_fold_bins,
-        density_dup_max: args.density_dup_max,
-        density_hor_min: args.density_hor_min,
-        phase_contrast_dup_min: args.phase_contrast_dup_min,
-        phase_contrast_hor_max: args.phase_contrast_hor_max,
-        max_tile_bp: args.max_tile_bp,
-        min_window_bp: args.min_window_bp,
-    };
-    let n = kitehor::hor_validate::run_subcommand(
-        &args.fasta,
-        &args.verdicts,
-        &args.global_peaks,
-        &args.out,
-        &cfg,
-    )?;
-    info!("hor-validate: wrote {n} row(s)");
     Ok(())
 }
 
@@ -163,9 +115,8 @@ fn run_summary_merge(args: SummaryMergeArgs) -> Result<()> {
     };
     let n = kitehor::summary::run_subcommand(
         &args.verdicts,
-        &args.subrepeat,
+        &args.tandem_validate,
         &args.ssr,
-        args.within_tile.as_deref(),
         &args.out,
         &cfg,
     )?;

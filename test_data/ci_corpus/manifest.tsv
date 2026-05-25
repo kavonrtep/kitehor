@@ -1,10 +1,10 @@
 record_id	source	expected_combined_class	notes
-rdna_like	tools/rule_proto/subrepeat/synthetic.fasta	tr_with_nested_tr	rDNA-like host + sub-TR
-small_scale	tools/rule_proto/subrepeat/synthetic.fasta	tr_with_nested_tr	small-scale sub-TR
-large_scale	tools/rule_proto/subrepeat/synthetic.fasta	tr_with_nested_tr	large-scale sub-TR
-partial_coverage	tools/rule_proto/subrepeat/synthetic.fasta	tr_with_nested_tr	sub-TR with partial array coverage
-asymmetric_position	tools/rule_proto/subrepeat/synthetic.fasta	tr_with_nested_tr	sub-TR offset within array
-short_subrepeat_block	tools/rule_proto/subrepeat/synthetic.fasta	tr_with_nested_tr	short sub-TR block
+rdna_like	tools/rule_proto/subrepeat/synthetic.fasta	unresolved	rDNA-like host + sub-TR; v5 spec §6 documents long-host nested TR as out-of-scope (rule_classify picks the short monomer)
+small_scale	tools/rule_proto/subrepeat/synthetic.fasta	tr_with_subrepeat	small-scale sub-TR (was tr_with_nested_tr pre-v5)
+large_scale	tools/rule_proto/subrepeat/synthetic.fasta	tr	large-scale sub-TR; new detector's host/3 ceiling filters the candidate out (out-of-scope per v5 spec §6)
+partial_coverage	tools/rule_proto/subrepeat/synthetic.fasta	tr_with_subrepeat	sub-TR with partial array coverage (was tr_with_nested_tr pre-v5)
+asymmetric_position	tools/rule_proto/subrepeat/synthetic.fasta	unresolved	sub-TR offset within array; rule_classify returns unresolved so the cascade falls through
+short_subrepeat_block	tools/rule_proto/subrepeat/synthetic.fasta	tr_with_subrepeat	short sub-TR block (was tr_with_nested_tr pre-v5)
 pure_simple_tr	tools/rule_proto/subrepeat/synthetic.fasta	tr	clean simple TR (no internal structure)
 pure_hor_k5	tools/rule_proto/subrepeat/synthetic.fasta	tr	HOR k=5 (classifier currently calls tr; documents fixture as-is)
 pure_ssr_ca	tools/rule_proto/subrepeat/synthetic.fasta	pure_ssr	(CA)n SSR dominant

@@ -1,17 +1,16 @@
 //! End-to-end orchestrator — `kitehor analyze <fasta> -o <prefix>`.
 //!
-//! Runs all six stages in sequence, sharing intermediate state in
-//! memory while still writing every per-stage TSV to disk for
-//! debugging and downstream analysis (TSV-per-stage is a hard
-//! contract — see `docs/new/rule_proto_impl_plan.md` §0).
+//! Runs five stages in sequence, sharing intermediate state in memory
+//! while still writing every per-stage TSV to disk for debugging and
+//! downstream analysis (TSV-per-stage is a hard contract — see
+//! `docs/new/rule_proto_impl_plan.md` §0).
 //!
 //! Stage map:
 //!
 //! - kite-periodicity → `<prefix>.kite.tsv` + `.kite.peaks.tsv`
 //! - rule-classify → `<prefix>.verdicts.tsv`
-//! - subrepeat-scan → `<prefix>.subrepeat.tsv` + `.windows.tsv`
+//! - tandem-validate → `<prefix>.tandem_validate.tsv`
 //! - ssr-scan → `<prefix>.ssr.tsv` + `.ssr.regions.tsv`
-//! - hor-validate → `<prefix>.hor_within_tile.tsv`
 //! - summary-merge → `<prefix>.summary.tsv`
 
 use anyhow::{Context, Result};
@@ -24,9 +23,8 @@ use std::path::{Path, PathBuf};
 pub struct Config {
     pub kite: crate::kite::KiteConfig,
     pub rule: crate::rule_classify::Config,
-    pub subrepeat: crate::subrepeat::Config,
+    pub tandem_validate: crate::tandem_validate::Config,
     pub ssr: crate::ssr::Config,
-    pub hor_validate: crate::hor_validate::Config,
     pub summary: crate::summary::Config,
 }
 
@@ -89,24 +87,10 @@ pub fn run_with(
     let verdicts_path = crate::rule_classify::io::verdicts_path(out_prefix);
     crate::rule_classify::io::write_verdicts(&verdicts_path, &verdicts)?;
 
-    // Convert verdicts → hor_validate input shape.
-    let hor_verdicts: Vec<crate::hor_validate::scan::HorVerdict> = verdicts
-        .iter()
-        .filter_map(|v| match v.kind {
-            crate::rule_classify::VerdictKind::Hor => Some(crate::hor_validate::scan::HorVerdict {
-                case_id: v.case_id.clone(),
-                founder: v.founder.unwrap_or(0.0),
-                tile: v.tile.unwrap_or(0.0),
-                multiplicity: v.multiplicity,
-            }),
-            _ => None,
-        })
-        .collect();
-
-    // 4a-4c. Subrepeat + SSR + HOR-validate. Independent — run in parallel.
-    // Need to feed each its own input view. SSR and subrepeat use the
-    // kite peak set; hor-validate uses kite + verdicts.
-    let kite_peaks_by_id: ahash::AHashMap<String, Vec<crate::subrepeat::scan::PeakRow>> =
+    // 4a–4b. Tandem-validate + SSR. Independent — run in parallel.
+    // Tandem-validate consumes the kite peaks; SSR consumes the kite
+    // rank-1 period as a hint.
+    let kite_peaks_by_id: ahash::AHashMap<String, Vec<crate::tandem_validate::scan::PeakRow>> =
         kite_results
             .iter()
             .map(|kr| {
@@ -114,7 +98,7 @@ pub fn run_with(
                     .peaks
                     .iter()
                     .enumerate()
-                    .map(|(i, p)| crate::subrepeat::scan::PeakRow {
+                    .map(|(i, p)| crate::tandem_validate::scan::PeakRow {
                         rank: (i + 1) as u32,
                         period: p.period,
                         score2_norm: p.score2_norm,
@@ -137,89 +121,65 @@ pub fn run_with(
         })
         .collect();
 
-    let ((subrepeat_res, ssr_res), hor_validate_res) = rayon::join(
-        || {
-            rayon::join(
-                || -> Result<()> {
-                    let mut sum_rows: Vec<crate::subrepeat::scan::SummaryRow> = Vec::new();
-                    let mut win_rows: Vec<crate::subrepeat::scan::WindowRow> = Vec::new();
-                    let empty: Vec<crate::subrepeat::scan::PeakRow> = Vec::new();
-                    for (rec_id, seq) in &records {
-                        let peaks = kite_peaks_by_id.get(rec_id).unwrap_or(&empty);
-                        let (s, w) =
-                            crate::subrepeat::scan::scan_record(rec_id, seq, peaks, &cfg.subrepeat);
-                        sum_rows.push(s);
-                        win_rows.extend(w);
-                    }
-                    crate::subrepeat::io::write_summary(
-                        &crate::subrepeat::io::summary_path(out_prefix),
-                        &sum_rows,
-                    )?;
-                    crate::subrepeat::io::write_windows(
-                        &crate::subrepeat::io::windows_path(out_prefix),
-                        &win_rows,
-                    )?;
-                    Ok(())
-                },
-                || -> Result<()> {
-                    let mut sum_rows: Vec<crate::ssr::scan::SummaryRow> = Vec::new();
-                    let mut reg_rows: Vec<crate::ssr::scan::RegionRow> = Vec::new();
-                    for (rec_id, seq) in &records {
-                        let (s, r) = crate::ssr::scan::scan_record(
-                            rec_id,
-                            seq,
-                            top_periods.get(rec_id).copied(),
-                            &cfg.ssr,
-                        );
-                        sum_rows.push(s);
-                        reg_rows.extend(r);
-                    }
-                    crate::ssr::io::write_summary(
-                        &crate::ssr::io::summary_path(out_prefix),
-                        &sum_rows,
-                    )?;
-                    crate::ssr::io::write_regions(
-                        &crate::ssr::io::regions_path(out_prefix),
-                        &reg_rows,
-                    )?;
-                    Ok(())
-                },
-            )
-        },
+    // Convert verdicts → tandem_validate input shape (all verdicts kept,
+    // including simple_tr and unresolved).
+    let tv_verdicts: Vec<crate::tandem_validate::scan::VerdictRow> = verdicts
+        .iter()
+        .map(|v| crate::tandem_validate::scan::VerdictRow {
+            case_id: v.case_id.clone(),
+            verdict: match v.kind {
+                crate::rule_classify::VerdictKind::Hor => "hor".to_string(),
+                crate::rule_classify::VerdictKind::SimpleTr => "simple_tr".to_string(),
+                crate::rule_classify::VerdictKind::Unresolved => "unresolved".to_string(),
+            },
+            founder: v.founder,
+            tile: v.tile,
+            multiplicity: v.multiplicity.map(|m| m as i64),
+        })
+        .collect();
+
+    let (tv_res, ssr_res) = rayon::join(
         || -> Result<()> {
-            let rows = crate::hor_validate::scan::run(
+            let rows = crate::tandem_validate::scan::scan_records(
                 &records,
-                &hor_verdicts,
+                &tv_verdicts,
                 &kite_peaks_by_id,
-                &cfg.hor_validate,
+                &cfg.tandem_validate,
             );
-            crate::hor_validate::io::write_validation(
-                &crate::hor_validate::io::out_path(out_prefix),
+            crate::tandem_validate::io::write_rows(
+                &crate::tandem_validate::io::out_path(out_prefix),
                 &rows,
             )?;
             Ok(())
         },
+        || -> Result<()> {
+            let mut sum_rows: Vec<crate::ssr::scan::SummaryRow> = Vec::new();
+            let mut reg_rows: Vec<crate::ssr::scan::RegionRow> = Vec::new();
+            for (rec_id, seq) in &records {
+                let (s, r) = crate::ssr::scan::scan_record(
+                    rec_id,
+                    seq,
+                    top_periods.get(rec_id).copied(),
+                    &cfg.ssr,
+                );
+                sum_rows.push(s);
+                reg_rows.extend(r);
+            }
+            crate::ssr::io::write_summary(&crate::ssr::io::summary_path(out_prefix), &sum_rows)?;
+            crate::ssr::io::write_regions(&crate::ssr::io::regions_path(out_prefix), &reg_rows)?;
+            Ok(())
+        },
     );
-    subrepeat_res?;
+    tv_res?;
     ssr_res?;
-    hor_validate_res?;
 
     // 5. Summary-merge — runs against the freshly-written TSVs so the
     // merge logic is exercised through the same code path as the
-    // standalone subcommand (cleaner than re-implementing the merge
-    // against the in-memory rows).
+    // standalone subcommand.
     let verdicts_p = crate::rule_classify::io::verdicts_path(out_prefix);
-    let subrep_p = crate::subrepeat::io::summary_path(out_prefix);
+    let tv_p = crate::tandem_validate::io::out_path(out_prefix);
     let ssr_p = crate::ssr::io::summary_path(out_prefix);
-    let hvt_p = crate::hor_validate::io::out_path(out_prefix);
-    let _ = crate::summary::run_subcommand(
-        &verdicts_p,
-        &subrep_p,
-        &ssr_p,
-        Some(hvt_p.as_path()),
-        out_prefix,
-        &cfg.summary,
-    )?;
+    let _ = crate::summary::run_subcommand(&verdicts_p, &tv_p, &ssr_p, out_prefix, &cfg.summary)?;
 
     // Final tally.
     let n_records = records.len();

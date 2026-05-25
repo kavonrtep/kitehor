@@ -1,5 +1,5 @@
 //! End-to-end orchestrator smoke test. Runs `kitehor analyze` on the
-//! 3-record smoke FASTA and asserts all 9 per-stage TSVs are emitted
+//! 3-record smoke FASTA and asserts all 7 per-stage TSVs are emitted
 //! and the combined_class for each record matches expectations.
 
 use std::path::PathBuf;
@@ -29,11 +29,9 @@ fn analyze_emits_all_per_stage_tsvs() {
         "kite.tsv",
         "kite.peaks.tsv",
         "verdicts.tsv",
-        "subrepeat.tsv",
-        "windows.tsv",
+        "tandem_validate.tsv",
         "ssr.tsv",
         "ssr.regions.tsv",
-        "hor_within_tile.tsv",
         "summary.tsv",
     ] {
         let p = format!("{prefix_s}.{suffix}");
