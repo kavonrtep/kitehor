@@ -15,16 +15,19 @@ Sequence-agnostic HOR detector. Three top-level workflows:
    # Or per stage:
    kitehor kite-periodicity <fasta> -o out.tsv --classify
    kitehor rule-classify <peaks.tsv> -o <prefix>
-   kitehor subrepeat-scan <fasta> --kite-peaks <peaks.tsv> -o <prefix>
+   kitehor tandem-validate <fasta> --verdicts <v.tsv> --peaks <p.tsv> -o <prefix>
    kitehor ssr-scan <fasta> --kite-peaks <peaks.tsv> -o <prefix>
-   kitehor hor-validate <fasta> --verdicts <v.tsv> --global-peaks <p.tsv> -o <prefix>
-   kitehor summary-merge --verdicts ... --subrepeat ... --ssr ... -o <prefix>
+   kitehor summary-merge --verdicts ... --tandem-validate ... --ssr ... -o <prefix>
    ```
-   `analyze` always emits all 8 per-stage TSVs (debugging contract).
-   The 8 combined_class values: `pure_ssr, tr_with_nested_tr,
-   tr_with_subrepeat, hor_with_ssr, hor, tr_with_ssr, tr, unresolved`.
-   Replaces the older 4-condition rule (`src/rule.rs`) and the legacy
-   ML pipeline (both removed in P1 / P6 of the port).
+   `analyze` always emits all 7 per-stage TSVs (debugging contract).
+   The 7 combined_class values: `pure_ssr, tr_with_subrepeat,
+   hor_with_ssr, hor, tr_with_ssr, tr, unresolved`. The unified
+   `tandem-validate` (port of `tools/rule_proto/tandem_validate.py`,
+   spec v5) replaced the prior `subrepeat-scan` + `hor-validate`
+   stages in v0.10; `tr_with_nested_tr` was retired in the same
+   cut (see `docs/new/tandem_validate_spec.md` for the rationale).
+   Earlier retirements: the 4-condition rule (`src/rule.rs`, P1) and
+   the legacy ML pipeline (P6).
 
 3. **v2 line-width detector** (`docs/new/detect_spec.md`):
    ```
@@ -79,10 +82,13 @@ src/                    Rust crate (lib + bin)
   analyze.rs            ← end-to-end rule-proto pipeline orchestrator
   rule_classify/        ← HOR / simple_tr / unresolved classifier
                           (port of tools/rule_proto/rule_proto.py)
-  subrepeat/            ← nested-TR detector (subrepeat_scan.py)
+  tandem_validate/      ← unified spatial-localization detector
+                          (port of tools/rule_proto/tandem_validate.py,
+                          spec v5); replaced subrepeat + hor_validate
+                          in v0.10
   ssr/                  ← TideCluster SSR scan + consensus (ssr_scan.py)
-  hor_validate/         ← within-tile + density (hor_within_tile_check.py)
-  summary/              ← 8-rule combined_class merger (summary.py)
+  summary/              ← 7-rule combined_class merger
+                          (summary_unified.py)
   kite.rs               k-mer periodogram (the upstream stage)
   emit_periods.rs       bridge: kite output → v2 detector periods.tsv
   detect/               ← v2 line-width detector (`kitehor detect*`)
@@ -165,7 +171,9 @@ for the implementation contract and milestone acceptance gates.
   ./target/release/kitehor analyze test_data/smoke/sequences.fasta \
       -o /tmp/smoke
   ```
-  Writes 8 per-stage TSVs at `/tmp/smoke.*.tsv` plus `.summary.tsv`.
+  Writes 7 per-stage TSVs at `/tmp/smoke.*.tsv` (`.kite.tsv`,
+  `.kite.peaks.tsv`, `.verdicts.tsv`, `.tandem_validate.tsv`,
+  `.ssr.tsv`, `.ssr.regions.tsv`) plus `.summary.tsv`.
   `combined_class` column on the summary: hor / hor / tr.
 
 - **Optional periodogram bundle**: add

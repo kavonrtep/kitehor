@@ -1,7 +1,7 @@
 # Rule-based pipeline (`kitehor analyze`)
 
-End-to-end Rust port of the `tools/rule_proto/*.py` prototype. Six
-subcommands cover the five stages plus the orchestrator:
+End-to-end Rust port of the `tools/rule_proto/*.py` prototype. Five
+subcommands cover the four stages plus the orchestrator:
 
 ```
 FASTA
@@ -12,38 +12,41 @@ kite-periodicity       k-mer pair-distance periodogram (existing)
   ▼
 rule-classify          HOR / simple_tr / unresolved verdict
   │
-  ├──────────────┬──────────────┐
-  ▼              ▼              ▼
-subrepeat-scan   ssr-scan       hor-validate
-(nested-TR)      (short motifs) (within-tile + density)
-  │              │              │
-  └──────────────┴──────────────┘
+  ├──────────────────────────┐
+  ▼                          ▼
+tandem-validate              ssr-scan
+(spatial localization        (short motifs)
+ of any sub-host period)
+  │                          │
+  └──────────────────────────┘
                  │
                  ▼
-            summary-merge       outer-join + 8-rule combined_class
+            summary-merge       outer-join + 7-rule combined_class
                  │
                  ▼
           <prefix>.summary.tsv
 ```
 
-The eight `combined_class` values:
+The seven `combined_class` values:
 
 | Class | Fires when |
 |---|---|
 | `pure_ssr` | `ssr_flag = yes` AND `ssr_dominant_motif_coverage_pct ≥ 80` |
-| `tr_with_nested_tr` | `subrepeat_flag = yes` |
-| `tr_with_subrepeat` | `hor_verdict = hor` AND `density_hint = localized_duplication` |
+| `tr_with_subrepeat` | `tv_decision = localized_subrepeat` |
 | `hor_with_ssr` | `hor_verdict = hor` AND `ssr_flag = yes` |
 | `hor` | `hor_verdict = hor` |
 | `tr_with_ssr` | `hor_verdict = simple_tr` AND `ssr_flag = yes` |
 | `tr` | `hor_verdict = simple_tr` |
 | `unresolved` | none of the above |
 
-`tr_with_nested_tr` and `tr_with_subrepeat` are the same biological
-phenomenon at different scales: a TR whose monomer contains internal
-repetition. The first is detected by the subrepeat-scan (≥ few sub-TR
-copies per monomer); the second by the hor-validate density check
-(localized 2–3-copy duplication within a HOR-mis-called monomer).
+`tr_with_subrepeat` covers what the prior 8-class cascade split between
+`tr_with_nested_tr` (array-scale heterogeneity, found by the old
+`subrepeat-scan`) and `tr_with_subrepeat` (within-tile heterogeneity,
+found by the old `hor-validate`). The new `tandem-validate` stage
+tests both scales with one density + spatial / phase-contrast check; see
+[`docs/new/tandem_validate_spec.md`](new/tandem_validate_spec.md) for
+the algorithm and [`docs/new/tandem_validate_port_plan.md`](new/tandem_validate_port_plan.md)
+for the v0.10 retirement notes.
 
 ## Quick start
 
@@ -52,30 +55,28 @@ copies per monomer); the second by the hor-validate density check
 kitehor analyze <fasta> -o <prefix>
 
 # Per stage (debugging / partial rerun)
-kitehor kite-periodicity <fasta> -o <prefix>.kite.tsv
-kitehor rule-classify   <prefix>.kite.tsv.peaks.tsv -o <prefix>
-kitehor subrepeat-scan  <fasta> --kite-peaks <prefix>.kite.tsv.peaks.tsv -o <prefix>
-kitehor ssr-scan        <fasta> --kite-peaks <prefix>.kite.tsv.peaks.tsv -o <prefix>
-kitehor hor-validate    <fasta> --verdicts <prefix>.verdicts.tsv \
-                                --global-peaks <prefix>.kite.tsv.peaks.tsv -o <prefix>
+kitehor kite-periodicity <fasta> -o <prefix>.kite.tsv --classify \
+                                 --out-peaks <prefix>.kite.peaks.tsv
+kitehor rule-classify   <prefix>.kite.peaks.tsv -o <prefix>
+kitehor tandem-validate <fasta> --verdicts <prefix>.verdicts.tsv \
+                                --peaks <prefix>.kite.peaks.tsv -o <prefix>
+kitehor ssr-scan        <fasta> --kite-peaks <prefix>.kite.peaks.tsv -o <prefix>
 kitehor summary-merge   --verdicts <prefix>.verdicts.tsv \
-                        --subrepeat <prefix>.subrepeat.tsv \
+                        --tandem-validate <prefix>.tandem_validate.tsv \
                         --ssr <prefix>.ssr.tsv \
-                        --within-tile <prefix>.hor_within_tile.tsv \
                         -o <prefix>
 ```
 
 ## Outputs (TSV-per-stage contract)
 
-`analyze` always emits all eight per-stage TSVs under `<prefix>.*`:
+`analyze` always emits all seven per-stage TSVs under `<prefix>.*`:
 
 | Stage | File(s) | Column count |
 |---|---|---:|
 | kite-periodicity | `.kite.tsv`, `.kite.peaks.tsv` | 9 / 9 |
 | rule-classify | `.verdicts.tsv` | 10 |
-| subrepeat-scan | `.subrepeat.tsv`, `.windows.tsv` | 13 / 7 |
+| tandem-validate | `.tandem_validate.tsv` | 16 |
 | ssr-scan | `.ssr.tsv`, `.ssr.regions.tsv` | 17 / 8 |
-| hor-validate | `.hor_within_tile.tsv` | 16 |
 | summary-merge | `.summary.tsv` | 32 |
 
 ## Optional periodogram bundle (`--periodogram`)
@@ -153,26 +154,64 @@ decision tree:
 
 All hardcoded constants exposed as CLI flags. See `--help`.
 
-### `subrepeat-scan`
+### `tandem-validate`
 
-For each record:
+Port of `tools/rule_proto/tandem_validate.py` (spec v5). Replaced the
+prior `subrepeat-scan` + `hor-validate` stages in v0.10. The
+algorithm contract is
+[`docs/new/tandem_validate_spec.md`](new/tandem_validate_spec.md);
+the summary here mirrors its §3 (algorithm) and §4 (decision tree).
 
-1. From kite peaks pick `(sub_candidate, host_candidate)` where the
-   sub is the shortest qualifying period in the top-N by score, and
-   the host is the strongest-scored period at least
-   `host_sub_ratio_min ×` the sub.
-2. Slide windows of size `max(window_mult_sub × sub_candidate,
-   min_window_bp)` across the array with step `window // step_frac`.
-3. Run kite **in-process** on each window using a window-id-derived
-   FNV-1a seed (byte-equivalent with the prototype's subprocess
-   invocations).
-4. Classify each window as `sub` if its rank-1 peak is within `tol`
-   of `sub_candidate` AND score ≥ `window_score_floor`.
-5. Morphological smoothing: absorb runs shorter than `min_run` into
-   neighbours (tie-break: previous neighbour wins when
-   `prev_len ≥ next_len`).
-6. Build contiguous `sub`-blocks. Flag `yes` iff at least one block
-   AND at least one `non_sub` window exist.
+For each record, given the verdict's host period (HOR → `tile`,
+`simple_tr` → `founder`, `unresolved` → kite rank-1):
+
+1. **Skip HOR k=2** — only 2 phase bins fit in `host`; the test is
+   geometrically degenerate. Returns `skip_k2`; the cascade falls
+   through to `hor`.
+2. **Pick candidates**: any kite peak with `cand_min_period ≤ p <
+   host / 3` and `score2_norm ≥ max(cand_score_floor,
+   cand_rel_score_floor × record_max_score)` (default relative floor
+   0.03). For HOR k ≥ 3, the founder is added as a `kind=Founder`
+   candidate even when it sits at the boundary (1% slack); peaks
+   within `founder_tol` of any `m·founder` rung (`m = 1..k-1`) are
+   excluded. Non-founder candidates are `kind=Other`, capped to top
+   `cand_top_n` (default 5) by score.
+3. **Plan windows**: `w = max(host / 3, 3·max_candidate,
+   min_window_bp)`, then `w = min(w, host)` (hard cap at host
+   preserves within-host phase resolution). Step is `w / 4`.
+4. **Per-window kite** (in-process, rayon-parallel) on each window.
+5. **Per-window presence**, gated by candidate kind:
+   * `Founder` (loose): `sum(scores ±tol of cand) ≥
+     presence_rel_floor × top_score` (default 0.2). Picks up the
+     founder even when the tile is the in-window top, as is the
+     case for any clean HOR.
+   * `Other` (strict): window's top period IS the candidate AND
+     `top_score ≥ window_score_floor` (default 0.3). The score
+     floor distinguishes legit heterogeneity (some weak-top
+     windows) from uniform tandem (all-strong-top windows).
+6. **Metrics** per candidate: `density = n_present / n_total`,
+   `spatial_contrast = max−min over 10 array-position bins`,
+   `phase_contrast = max−min over 10 (mid mod host) bins`
+   (computed iff `window_bp < host × 0.95`, i.e., when a window can
+   fit at multiple phase positions of one host cycle).
+7. **Per-candidate decision** (after `n_present < min_present_windows
+   → no_signal` short-circuit):
+   * `localized` iff `density ≤ density_dup_max` OR any
+     `contrast ≥ contrast_dup_min`.
+   * `uniform` iff `density ≥ density_hor_min` AND both contrasts
+     `≤ contrast_hor_max`.
+   * else `ambiguous`.
+8. **Per-record decision**: best candidate by
+   `(rank, −(spatial + phase))` where
+   `rank = localized < ambiguous < uniform < no_signal`. Output
+   `decision_hint`:
+   * `localized` → `localized_subrepeat` → cascade fires
+     `tr_with_subrepeat`
+   * `uniform` → `confirms_host` → cascade falls through to verdict
+   * `ambiguous` / `no_signal` → falls through
+
+Every threshold is exposed as a CLI flag; defaults match the Python
+prototype.
 
 ### `ssr-scan`
 
@@ -195,37 +234,17 @@ For each record:
    - 1 → `consensus_single` (use the dimer's summary as authoritative)
    - ≥ 2 → `consensus_multi` (per-motif coverage from the raw scan)
 
-### `hor-validate`
-
-For each `hor_verdict = hor` row in the verdicts TSV:
-
-1. **Skip** if `k < min_k_for_density` (default 4) — k = 2 or 3 are
-   geometrically degenerate and emit `density_hint =
-   k_too_low_for_test(k=N)`.
-2. **Within-tile** — slice `seq[0..tile]`, run kite, compute
-   `within_founder_top_ratio`. Drive `decision_hint` against
-   thresholds `0.5 / 0.2 / 0.05`.
-3. **Density windows** — slide windows of size
-   `max(tile / density_window_tile_frac, min_founder_mult × founder,
-   min_density_window_bp)` (step capped to keep
-   ≤ `max_density_windows`). For each, run kite and check whether
-   `score_near(founder) ≥ density_rel_floor × top_score`.
-4. **Phase fold** into `phase_fold_bins` buckets by
-   `(window_midpoint mod tile) // bin_width`; compute `contrast =
-   max(frac_per_bin) − min(frac_per_bin)`.
-5. **Combined decision**:
-   - `localized_duplication` iff `density ≤ density_dup_max OR
-     contrast ≥ phase_contrast_dup_min`
-   - else `spatially_confirms_hor` iff `density ≥ density_hor_min AND
-     contrast ≤ phase_contrast_hor_max`
-   - else `ambiguous`
-
 ### `summary-merge`
 
 Outer-join on `record_id` (sorted lexicographically — matches
 pandas's outer-merge behavior in the user's env). Defaults fill
-missing values; the 8-rule decision tree determines
+missing values; the 7-rule decision tree determines
 `combined_class`. Float columns use `%.4g`.
+
+The summary schema dropped the old subrepeat- and hor-validate-prefixed
+columns and gained `tv_*` columns sourced from the new
+`tandem_validate.tsv`. `length_bp` is no longer included; join on
+`record_id` against `<prefix>.kite.tsv` if you need it.
 
 ## Float formatting policy
 
@@ -235,9 +254,9 @@ prototype:
 
 - `rule-classify` → `%.6g`
 - `summary-merge` → `%.4g`
-- `subrepeat-scan`, `ssr-scan` → pandas default (≈ shortest
-  roundtrip + `.0` for integer-valued floats)
-- `hor-validate` → `%.6g`
+- `ssr-scan` → pandas default (≈ shortest roundtrip + `.0` for
+  integer-valued floats)
+- `tandem-validate` → `%.6g`
 
 The shared helper `rule_classify::io::fmt_g(precision, x)`
 implements Python's `%g` semantics (significand-precision, scientific
@@ -245,15 +264,18 @@ fallback for very small/large magnitudes, trailing-zero stripping).
 
 ## Byte-equivalence with the Python prototype
 
-All five stages have been validated byte-identical with the
-prototype on the smoke fixture (`test_data/smoke/sequences.fasta`)
-and on the synthetic regression fixtures
-(`tools/rule_proto/subrepeat/synthetic.fasta`,
-`tools/rule_proto/fixtures/*.peaks.tsv`).
+The `rule-classify`, `ssr-scan`, and `summary-merge` stages are
+validated byte-identical with the prototype on the smoke fixture
+(`test_data/smoke/sequences.fasta`) and on the hand-curated
+fixtures in `tools/rule_proto/fixtures/` (`tests/rule_classify_fixtures.rs`).
 
-The `rule-classify` stage is additionally validated against the six
-hand-curated fixtures in `tools/rule_proto/fixtures/` via
-`tests/rule_classify_fixtures.rs`.
+`tandem-validate` is validated against the Python prototype via
+`tests/tandem_validate_python_parity.rs` (`#[ignore]`-flagged,
+needs `python3` + `pandas` + the prototype at
+`tools/rule_proto/tandem_validate.py`). The test asserts the
+`decision_hint` column matches for every record in a 6-case
+synthetic fixture covering the `skip_k2`, `confirms_host`,
+`no_candidates`, and `localized_subrepeat` paths.
 
 ## Replaced modules
 
@@ -265,17 +287,25 @@ the legacy ML pipeline (`classifier.rs`, `classify.rs`, `features.rs`,
 `--rule-top-n`, `--coverage`, `--classifier-config`, `--hor-model`,
 `--k-model`, `--no-homology`).
 
+`v0.10` retired `src/subrepeat/` and `src/hor_validate/` along with
+their `subrepeat-scan` / `hor-validate` subcommands, the
+`summary-merge --subrepeat` / `--within-tile` flags, and the
+`tr_with_nested_tr` combined class — all replaced by the unified
+`tandem-validate` stage and the 7-class cascade. See
+[`docs/new/tandem_validate_port_plan.md`](new/tandem_validate_port_plan.md)
+for the rollout sequence.
+
 ## Performance
 
 Targets on test_590 (2779 records, ~280 MB FASTA), single machine,
-default rayon parallelism:
+default rayon parallelism. v0.10 figures roll up the prior
+`subrepeat-scan` + `hor-validate` budgets into `tandem-validate`:
 
 | Stage | Python wall | Rust target |
 |---|---:|---:|
 | kite-periodicity | 0:15 | 0:15 |
 | rule-classify | 0:10 | < 0:01 |
-| subrepeat-scan | 2:50 | < 0:30 |
+| tandem-validate | 3:15 | < 0:35 |
 | ssr-scan | 7:00 | < 0:20 |
-| hor-validate | 0:25 | < 0:05 |
 | summary-merge | 0:01 | < 0:01 |
 | **analyze (end-to-end)** | **~10:40** | **< 1:30** |

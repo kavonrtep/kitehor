@@ -45,13 +45,13 @@ See [`docs/release.md`](docs/release.md) for the release runbook.
 ## Quick start
 
 ```bash
-# End-to-end on one FASTA — always emits all 8 per-stage TSVs.
+# End-to-end on one FASTA — always emits all 7 per-stage TSVs.
 kitehor analyze input.fasta -o out_prefix
 cat out_prefix.summary.tsv      # 32 columns; last is combined_class
 ```
 
 `combined_class` is one of: `hor`, `hor_with_ssr`, `tr`, `tr_with_ssr`,
-`tr_with_nested_tr`, `tr_with_subrepeat`, `pure_ssr`, `unresolved`.
+`tr_with_subrepeat`, `pure_ssr`, `unresolved`.
 
 ### Pipeline at a glance
 
@@ -64,12 +64,13 @@ kite-periodicity       k-mer pair-distance periodogram
   ▼
 rule-classify          HOR / simple_tr / unresolved
   │
-  ├──────────────┬──────────────┐
-  ▼              ▼              ▼
-subrepeat-scan   ssr-scan       hor-validate
-(nested-TR)      (short motifs) (within-tile + density)
-  │              │              │
-  └──────────────┴──────────────┘
+  ├──────────────────────────┐
+  ▼                          ▼
+tandem-validate              ssr-scan
+(spatial localization        (short motifs)
+ of any sub-host period)
+  │                          │
+  └──────────────────────────┘
                  ▼
             summary-merge      combined_class
 ```
@@ -92,13 +93,12 @@ A 3-record synthetic fixture (87 KB) ships under `test_data/smoke/`:
 
 | Command | What it does | Detailed docs |
 |---|---|---|
-| `analyze` | End-to-end pipeline; writes all 8 per-stage TSVs | [`docs/rule_proto.md`](docs/rule_proto.md) |
+| `analyze` | End-to-end pipeline; writes all 7 per-stage TSVs | [`docs/rule_proto.md`](docs/rule_proto.md) |
 | `kite-periodicity` | k-mer-distance periodogram (Rust port of TideCluster's `kite.R`) | [`docs/rule_proto.md`](docs/rule_proto.md) |
 | `rule-classify` | HOR / simple_tr / unresolved verdict per record | [`docs/rule_proto.md`](docs/rule_proto.md#rule-classify) |
-| `subrepeat-scan` | Spatial alternation / nested-TR detector | [`docs/rule_proto.md`](docs/rule_proto.md#subrepeat-scan) |
+| `tandem-validate` | Unified spatial-localization subrepeat detector | [`docs/rule_proto.md`](docs/rule_proto.md#tandem-validate) |
 | `ssr-scan` | TideCluster-style SSR + kite-driven consensus | [`docs/rule_proto.md`](docs/rule_proto.md#ssr-scan) |
-| `hor-validate` | Within-tile + spatial density HOR validation | [`docs/rule_proto.md`](docs/rule_proto.md#hor-validate) |
-| `summary-merge` | Outer-join + 8-rule combined_class | [`docs/rule_proto.md`](docs/rule_proto.md#summary-merge) |
+| `summary-merge` | Outer-join + 7-rule combined_class | [`docs/rule_proto.md`](docs/rule_proto.md#summary-merge) |
 | `detect` / `detect-batch` | v2 line-width detector (operates on row embeddings) | [`docs/new/detect_impl_plan.md`](docs/new/detect_impl_plan.md) |
 | `simulate` / `simulate-grid` | Legacy params.tsv-driven simulator | — |
 | `synth*` | v2 YAML-driven simulator (wobble, phase shifts, events) | [`docs/new/simulator_impl_plan.md`](docs/new/simulator_impl_plan.md) |
@@ -108,7 +108,7 @@ Run any subcommand with `--help` for the full flag list.
 ### `kite-periodicity --classify`
 
 Single-stage variant for users who only need a HOR verdict (skips the
-SSR/subrepeat/within-tile checks). Output adds `verdict`, `founder`,
+SSR / tandem-validate checks). Output adds `verdict`, `founder`,
 `multiplicity`, `tile`, `share` columns.
 
 ```bash
@@ -175,7 +175,7 @@ Design + canonical YAML schema:
 This repo intentionally ships **no real biological FASTA**:
 
 - `test_data/smoke/` — 3-record synthetic fixture for build verification.
-- `test_data/ci_corpus/` — 13-record curated corpus exercising 5/8
+- `test_data/ci_corpus/` — 13-record curated corpus exercising 5/7
   `combined_class` values; provenance in
   [`test_data/ci_corpus/manifest.tsv`](test_data/ci_corpus/manifest.tsv).
 - `tests/synth_configs/` — 23 v2-simulator CI fixtures (T01–T20).
@@ -190,9 +190,9 @@ their specs; bundles are regenerated on demand with
 src/
   analyze.rs         end-to-end orchestrator
   rule_classify/     HOR / simple_tr / unresolved classifier
-  subrepeat/         nested-TR detector
+  tandem_validate/   unified spatial-localization subrepeat detector
+                       (replaced subrepeat + hor_validate in v0.10)
   ssr/               TideCluster SSR + kite consensus
-  hor_validate/      within-tile + density validation
   summary/           combined_class merger
   kite.rs            k-mer periodogram
   emit_periods.rs    bridge: kite output → v2 detector periods.tsv

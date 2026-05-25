@@ -1,5 +1,19 @@
 # Rule-proto pipeline — Rust port implementation plan
 
+> **Historical document — partially superseded by v0.10.**
+>
+> The pipeline-shape decisions in this plan still describe the kitehor
+> rule-proto pipeline accurately, with one exception: in v0.10 the
+> two `subrepeat-scan` + `hor-validate` stages were merged into a
+> single unified `tandem-validate` stage, retiring the
+> `tr_with_nested_tr` combined class. The current 5-stage / 7-class
+> layout is documented in [`../rule_proto.md`](../rule_proto.md);
+> the v0.10 retirement rationale + rollout plan live in
+> [`tandem_validate_spec.md`](tandem_validate_spec.md) and
+> [`tandem_validate_port_plan.md`](tandem_validate_port_plan.md). Read
+> those for the current architecture; read this doc for the original
+> port intent and the user-confirmed `[Q-N]` design decisions.
+
 **Status**: v2 — 2026-05-22. User answers folded in (§11). Implementation in progress.
 **Author**: drafted from `docs/rust_port_onboarding.md`, the prototype
 sources at `tools/rule_proto/*.py`, and a fresh audit of the kitehor
