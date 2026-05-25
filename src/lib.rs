@@ -39,5 +39,6 @@ pub mod analyze;
 pub mod detect;
 pub mod emit_periods;
 pub mod hor_validate;
+pub mod tandem_validate;
 
 pub use errors::{HordetectError, Result};

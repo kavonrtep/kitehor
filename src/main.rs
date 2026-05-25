@@ -5,7 +5,7 @@ use clap::Parser;
 use kitehor::cli::{
     AnalyzeArgs, Cli, Command, DetectArgs, DetectBatchArgs, HorValidateArgs, KitePeriodicityArgs,
     RuleClassifyArgs, SimulateArgs, SimulateGridArgs, SsrScanArgs, SubrepeatScanArgs,
-    SummaryMergeArgs, SynthArgs, SynthBatchArgs, SynthValidateArgs,
+    SummaryMergeArgs, SynthArgs, SynthBatchArgs, SynthValidateArgs, TandemValidateArgs,
 };
 use kitehor::io::{load_fasta, LoadQc, LoadStatus};
 use kitehor::kite::{analyze as kite_analyze, KiteConfig};
@@ -31,6 +31,7 @@ fn main() -> Result<()> {
         Command::SsrScan(args) => run_ssr_scan(args),
         Command::SubrepeatScan(args) => run_subrepeat_scan(args),
         Command::HorValidate(args) => run_hor_validate(args),
+        Command::TandemValidate(args) => run_tandem_validate(args),
         Command::Analyze(args) => run_analyze(args),
     }
 }
@@ -100,6 +101,44 @@ fn run_hor_validate(args: HorValidateArgs) -> Result<()> {
         &cfg,
     )?;
     info!("hor-validate: wrote {n} row(s)");
+    Ok(())
+}
+
+fn run_tandem_validate(args: TandemValidateArgs) -> Result<()> {
+    if args.threads > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global()
+            .ok();
+    }
+    let cfg = kitehor::tandem_validate::Config {
+        cand_min_period: args.cand_min_period,
+        cand_score_floor: args.cand_score_floor,
+        cand_rel_score_floor: args.cand_rel_score_floor,
+        cand_top_n: args.cand_top_n,
+        host_inside_ratio: args.host_inside_ratio,
+        founder_tol: args.founder_tol,
+        window_host_frac: args.window_host_frac,
+        window_cand_mult: args.window_cand_mult,
+        min_window_bp: args.min_window_bp,
+        period_match_tol: args.period_match_tol,
+        window_score_floor: args.window_score_floor,
+        presence_rel_floor: args.presence_rel_floor,
+        n_bins: args.n_bins,
+        density_dup_max: args.density_dup_max,
+        density_hor_min: args.density_hor_min,
+        contrast_dup_min: args.contrast_dup_min,
+        contrast_hor_max: args.contrast_hor_max,
+        min_present_windows: args.min_present_windows,
+    };
+    let n = kitehor::tandem_validate::run_subcommand(
+        &args.fasta,
+        &args.verdicts,
+        &args.peaks,
+        &args.out,
+        &cfg,
+    )?;
+    info!("tandem-validate: wrote {n} row(s)");
     Ok(())
 }
 

@@ -72,6 +72,11 @@ pub enum Command {
     /// `tools/rule_proto/hor_within_tile_check.py`). Emits
     /// `<prefix>.hor_within_tile.tsv`.
     HorValidate(HorValidateArgs),
+    /// Unified spatial-localization subrepeat detector (port of
+    /// `tools/rule_proto/tandem_validate.py`, spec v5). Replaces
+    /// `subrepeat-scan` + `hor-validate` in the rule-proto pipeline.
+    /// Emits `<prefix>.tandem_validate.tsv`.
+    TandemValidate(TandemValidateArgs),
     /// End-to-end pipeline. Runs kite-periodicity → rule-classify →
     /// (subrepeat-scan ‖ ssr-scan ‖ hor-validate) → summary-merge on
     /// one FASTA. Always emits every per-stage TSV under
@@ -539,6 +544,73 @@ pub struct HorValidateArgs {
     pub max_tile_bp: usize,
     #[arg(long, default_value_t = 200)]
     pub min_window_bp: usize,
+}
+
+// ---------------------------------------------------------------------------
+// tandem-validate
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct TandemValidateArgs {
+    /// Input FASTA.
+    pub fasta: PathBuf,
+    /// rule-classify verdicts TSV.
+    #[arg(long, required = true)]
+    pub verdicts: PathBuf,
+    /// Global kite peaks TSV (long-format).
+    #[arg(long, required = true)]
+    pub peaks: PathBuf,
+    /// Output prefix. Writes `<prefix>.tandem_validate.tsv`.
+    #[arg(short, long, required = true)]
+    pub out: PathBuf,
+
+    // Candidate selection
+    #[arg(long, default_value_t = 20)]
+    pub cand_min_period: usize,
+    #[arg(long, default_value_t = 0.0)]
+    pub cand_score_floor: f64,
+    #[arg(long, default_value_t = 0.03)]
+    pub cand_rel_score_floor: f64,
+    #[arg(long, default_value_t = 5)]
+    pub cand_top_n: usize,
+    #[arg(long, default_value_t = 1.0 / 3.0)]
+    pub host_inside_ratio: f64,
+    #[arg(long, default_value_t = 0.05)]
+    pub founder_tol: f64,
+
+    // Window sizing
+    #[arg(long, default_value_t = 1.0 / 3.0)]
+    pub window_host_frac: f64,
+    #[arg(long, default_value_t = 3.0)]
+    pub window_cand_mult: f64,
+    #[arg(long, default_value_t = 200)]
+    pub min_window_bp: usize,
+
+    // Presence
+    #[arg(long, default_value_t = 0.02)]
+    pub period_match_tol: f64,
+    #[arg(long, default_value_t = 0.3)]
+    pub window_score_floor: f64,
+    #[arg(long, default_value_t = 0.2)]
+    pub presence_rel_floor: f64,
+
+    // Binning + decision thresholds
+    #[arg(long, default_value_t = 10)]
+    pub n_bins: usize,
+    #[arg(long, default_value_t = 0.35)]
+    pub density_dup_max: f64,
+    #[arg(long, default_value_t = 0.7)]
+    pub density_hor_min: f64,
+    #[arg(long, default_value_t = 0.4)]
+    pub contrast_dup_min: f64,
+    #[arg(long, default_value_t = 0.15)]
+    pub contrast_hor_max: f64,
+    #[arg(long, default_value_t = 3)]
+    pub min_present_windows: usize,
+
+    /// Number of rayon worker threads (0 = auto).
+    #[arg(long, default_value_t = 0)]
+    pub threads: usize,
 }
 
 // ---------------------------------------------------------------------------
