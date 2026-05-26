@@ -19,7 +19,12 @@ pub fn verdicts_path(out_prefix: &Path) -> PathBuf {
 /// Read a kite peaks long-format TSV and group rows by `case_id`,
 /// preserving **first-appearance order** (matches pandas
 /// `groupby(sort=False)`).
-pub fn read_peaks_grouped(path: &Path) -> Result<Vec<(String, Vec<PeakRow>)>> {
+///
+/// Returns `(case_id, array_length, peak_rows)` per record.
+/// `array_length` is parsed from the optional `array_length` column;
+/// when absent or unparseable for a record, defaults to 0 (which
+/// disables the `min_tile_copies` gate downstream).
+pub fn read_peaks_grouped(path: &Path) -> Result<Vec<(String, usize, Vec<PeakRow>)>> {
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .has_headers(true)
@@ -33,6 +38,7 @@ pub fn read_peaks_grouped(path: &Path) -> Result<Vec<(String, Vec<PeakRow>)>> {
             "rank" => idx.rank = Some(i),
             "period" => idx.period = Some(i),
             "score2_norm" => idx.score2_norm = Some(i),
+            "array_length" => idx.array_length = Some(i),
             _ => {}
         }
     }
@@ -48,9 +54,12 @@ pub fn read_peaks_grouped(path: &Path) -> Result<Vec<(String, Vec<PeakRow>)>> {
     let score_idx = idx
         .score2_norm
         .ok_or_else(|| anyhow!("missing 'score2_norm' column in {:?}", path))?;
+    let array_length_idx = idx.array_length;
 
     let mut order: Vec<String> = Vec::new();
     let mut by_id: std::collections::HashMap<String, Vec<PeakRow>> =
+        std::collections::HashMap::new();
+    let mut length_by_id: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     for (rec_idx, rec) in rdr.records().enumerate() {
         let rec = rec.with_context(|| format!("reading record {} of {:?}", rec_idx, path))?;
@@ -73,6 +82,13 @@ pub fn read_peaks_grouped(path: &Path) -> Result<Vec<(String, Vec<PeakRow>)>> {
             .trim()
             .parse()
             .with_context(|| format!("parsing score2_norm at row {}", rec_idx))?;
+        if let Some(al_idx) = array_length_idx {
+            if let Some(s) = rec.get(al_idx) {
+                if let Ok(al) = s.trim().parse::<usize>() {
+                    length_by_id.entry(case_id.clone()).or_insert(al);
+                }
+            }
+        }
         by_id
             .entry(case_id.clone())
             .or_insert_with(|| {
@@ -89,7 +105,8 @@ pub fn read_peaks_grouped(path: &Path) -> Result<Vec<(String, Vec<PeakRow>)>> {
         .into_iter()
         .map(|id| {
             let v = by_id.remove(&id).unwrap_or_default();
-            (id, v)
+            let al = length_by_id.remove(&id).unwrap_or(0);
+            (id, al, v)
         })
         .collect())
 }
@@ -100,6 +117,7 @@ struct ColumnIndex {
     rank: Option<usize>,
     period: Option<usize>,
     score2_norm: Option<usize>,
+    array_length: Option<usize>,
 }
 
 /// Write the verdicts TSV. Format matches `tools/rule_proto/rule_proto.py`:

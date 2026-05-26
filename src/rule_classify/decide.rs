@@ -20,6 +20,11 @@ pub struct Config {
     pub founder_floor: f64,
     pub high_k_tile_floor: f64,
     pub lone_significant_frac: f64,
+    /// Minimum number of tile copies (`array_length / tile`) required to
+    /// lock in a `hor` verdict. When below this, the verdict is demoted
+    /// to `unresolved` with `reason = insufficient_tile_copies:n=<f>:<min>`.
+    /// 0 disables the gate.
+    pub min_tile_copies: usize,
 }
 
 impl Default for Config {
@@ -34,6 +39,7 @@ impl Default for Config {
             founder_floor: 0.1,
             high_k_tile_floor: 0.05,
             lone_significant_frac: 0.1,
+            min_tile_copies: 6,
         }
     }
 }
@@ -73,14 +79,41 @@ pub struct Verdict {
 }
 
 /// Convenience wrapper used by `classify(&KiteResult, &Config)`.
-pub fn decide(case_id: &str, rows: &[PeakRow], cfg: &Config) -> Verdict {
-    decide_with_clusters(case_id, rows, cfg).0
+pub fn decide(case_id: &str, array_length: usize, rows: &[PeakRow], cfg: &Config) -> Verdict {
+    decide_with_clusters(case_id, array_length, rows, cfg).0
+}
+
+/// Demote a `hor` verdict to `unresolved` when the implied tile copy
+/// count `array_length / tile` falls below `cfg.min_tile_copies`.
+/// Returns the verdict unchanged for non-hor kinds, when the gate is
+/// disabled (`min_tile_copies == 0`), or when array_length is unknown.
+fn demote_if_few_tiles(v: Verdict, array_length: usize, min_tile_copies: usize) -> Verdict {
+    if v.kind != VerdictKind::Hor || min_tile_copies == 0 || array_length == 0 {
+        return v;
+    }
+    let tile = match v.tile {
+        Some(t) if t > 0.0 => t,
+        _ => return v,
+    };
+    let n_tiles = array_length as f64 / tile;
+    if n_tiles >= min_tile_copies as f64 {
+        return v;
+    }
+    Verdict {
+        kind: VerdictKind::Unresolved,
+        reason: format!(
+            "insufficient_tile_copies:n={:.2}<{}",
+            n_tiles, min_tile_copies
+        ),
+        ..v
+    }
 }
 
 /// Apply the classifier; return the verdict and the post-filter cluster
 /// list (used by `--dump-clusters`).
 pub fn decide_with_clusters(
     case_id: &str,
+    array_length: usize,
     rows: &[PeakRow],
     cfg: &Config,
 ) -> (Verdict, Vec<Cluster>) {
@@ -173,6 +206,7 @@ pub fn decide_with_clusters(
             "top_is_multiple_of_founder",
             &clusters,
         );
+        let v = demote_if_few_tiles(v, array_length, cfg.min_tile_copies);
         return (v, clusters);
     }
 
@@ -218,6 +252,7 @@ pub fn decide_with_clusters(
             && harmonic_confirms_hor(&clusters, top.rep_period, k, cfg.tol)
         {
             let v = hor_verdict(case_id, &top, k, best, reason, &clusters);
+            let v = demote_if_few_tiles(v, array_length, cfg.min_tile_copies);
             return (v, clusters);
         }
         prev_seen_score = s_k;
@@ -403,7 +438,7 @@ mod tests {
     #[test]
     fn no_clusters_is_no_signal_verdict() {
         let cfg = Config::default();
-        let v = decide("empty", &[], &cfg);
+        let v = decide("empty", 10_000, &[], &cfg);
         assert_eq!(v.kind, VerdictKind::Unresolved);
         assert_eq!(v.reason, "no_clusters");
         assert_eq!(v.n_clusters, 0);
@@ -416,9 +451,11 @@ mod tests {
         // Case A: top=900 = 3 × founder=300, founder.score (0.20+0.10=0.30)
         // ≥ 0.1 × top.score (0.50). Harmonic check passes since no
         // (k+1)×founder = 1200 cluster exists.
+        // array_length = 6 × tile so the min_tile_copies=6 gate does not
+        // demote the hor call.
         let rows = vec![row(1, 900, 0.50), row(2, 298, 0.20), row(3, 300, 0.10)];
         let cfg = Config::default();
-        let v = decide("hor_k3", &rows, &cfg);
+        let v = decide("hor_k3", 6 * 900, &rows, &cfg);
         assert_eq!(v.kind, VerdictKind::Hor);
         assert_eq!(v.multiplicity, Some(3));
         let f = v.founder.unwrap();
@@ -428,11 +465,42 @@ mod tests {
     }
 
     #[test]
+    fn hor_with_few_tiles_demoted_to_unresolved() {
+        // Same hor input as `clean_k3_hor_tile_dominant`, but the array
+        // is only 3 tiles long → fails the min_tile_copies=6 gate.
+        let rows = vec![row(1, 900, 0.50), row(2, 298, 0.20), row(3, 300, 0.10)];
+        let cfg = Config::default();
+        let v = decide("hor_k3_few_tiles", 3 * 900, &rows, &cfg);
+        assert_eq!(v.kind, VerdictKind::Unresolved);
+        assert!(
+            v.reason.starts_with("insufficient_tile_copies"),
+            "reason = {}",
+            v.reason
+        );
+        // Underlying founder / tile / multiplicity preserved on the
+        // unresolved row for downstream inspection.
+        assert_eq!(v.multiplicity, Some(3));
+        assert!(v.tile.is_some());
+        assert!(v.founder.is_some());
+    }
+
+    #[test]
+    fn min_tile_copies_zero_disables_gate() {
+        let rows = vec![row(1, 900, 0.50), row(2, 298, 0.20), row(3, 300, 0.10)];
+        let cfg = Config {
+            min_tile_copies: 0,
+            ..Config::default()
+        };
+        let v = decide("hor_no_gate", 3 * 900, &rows, &cfg);
+        assert_eq!(v.kind, VerdictKind::Hor);
+    }
+
+    #[test]
     fn monotonic_decay_is_simple_tr() {
         // top at 300, harmonics at 600/900 with monotonically decreasing scores.
         let rows = vec![row(1, 300, 0.50), row(2, 600, 0.30), row(3, 900, 0.15)];
         let cfg = Config::default();
-        let v = decide("tr_mono", &rows, &cfg);
+        let v = decide("tr_mono", 10_000, &rows, &cfg);
         assert_eq!(v.kind, VerdictKind::SimpleTr);
         assert_eq!(v.reason, "monotonic_multiples");
     }
@@ -442,7 +510,7 @@ mod tests {
         // Lone strong peak, no multiples at all → lone_significant_cluster.
         let rows = vec![row(1, 400, 0.50)];
         let cfg = Config::default();
-        let v = decide("tr_lone", &rows, &cfg);
+        let v = decide("tr_lone", 10_000, &rows, &cfg);
         assert_eq!(v.kind, VerdictKind::SimpleTr);
         assert_eq!(v.reason, "lone_significant_cluster");
     }

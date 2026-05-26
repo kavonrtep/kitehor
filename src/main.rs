@@ -45,6 +45,7 @@ fn run_analyze(args: AnalyzeArgs) -> Result<()> {
     cfg.rule.tol = args.rule_tol;
     cfg.rule.min_period = args.rule_min_period;
     cfg.rule.k_max = args.rule_k_max;
+    cfg.rule.min_tile_copies = args.rule_min_tile_copies;
     cfg.summary.pure_ssr_pct_threshold = args.pure_ssr_pct_threshold;
     cfg.summary.ssr_has_pct_threshold = args.ssr_has_pct_threshold;
     cfg.ssr.ssr_flag_threshold_pct = args.ssr_flag_threshold_pct;
@@ -136,6 +137,7 @@ fn run_rule_classify(args: RuleClassifyArgs) -> Result<()> {
         founder_floor: args.founder_floor,
         high_k_tile_floor: args.high_k_tile_floor,
         lone_significant_frac: args.lone_significant_frac,
+        min_tile_copies: args.min_tile_copies,
     };
     let n = kitehor::rule_classify::run_subcommand(
         &args.peaks,

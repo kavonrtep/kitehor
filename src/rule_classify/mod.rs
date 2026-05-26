@@ -38,7 +38,7 @@ pub fn classify(kite: &KiteResult, cfg: &Config) -> Verdict {
             score2_norm: p.score2_norm,
         })
         .collect();
-    decide::decide(&kite.array_id, &rows, cfg)
+    decide::decide(&kite.array_id, kite.length_bp, &rows, cfg)
 }
 
 /// Backward-compatible enum consumed by `emit_periods::build_rows` and
@@ -139,8 +139,8 @@ pub fn run_subcommand(
     if let Some(dir) = dump_clusters {
         std::fs::create_dir_all(dir)?;
     }
-    for (case_id, rows) in &grouped {
-        let (verdict, clusters) = decide::decide_with_clusters(case_id, rows, cfg);
+    for (case_id, array_length, rows) in &grouped {
+        let (verdict, clusters) = decide::decide_with_clusters(case_id, *array_length, rows, cfg);
         verdicts.push(verdict);
         if let Some(dir) = dump_clusters {
             if !clusters.is_empty() {

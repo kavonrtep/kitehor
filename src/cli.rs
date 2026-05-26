@@ -411,6 +411,13 @@ pub struct RuleClassifyArgs {
     #[arg(long, default_value_t = 0.1)]
     pub lone_significant_frac: f64,
 
+    /// Minimum number of tile copies (`array_length / tile`) required
+    /// to lock in a `hor` verdict. Calls with fewer copies are demoted
+    /// to `unresolved` with `reason = insufficient_tile_copies:n=<f>:<min>`.
+    /// 0 disables the gate.
+    #[arg(long, default_value_t = 6)]
+    pub min_tile_copies: usize,
+
     /// Optional: write per-case cluster dumps to this directory.
     #[arg(long, value_name = "DIR")]
     pub dump_clusters: Option<PathBuf>,
@@ -439,6 +446,10 @@ pub struct AnalyzeArgs {
     pub rule_min_period: usize,
     #[arg(long, default_value_t = 30)]
     pub rule_k_max: usize,
+    /// Minimum number of tile copies (`array_length / tile`) required
+    /// to lock in a `hor` verdict. 0 disables.
+    #[arg(long, default_value_t = 6)]
+    pub rule_min_tile_copies: usize,
     /// `pure_ssr` fires when `ssr_raw_total_coverage_pct ≥` this.
     #[arg(long, default_value_t = 80.0)]
     pub pure_ssr_pct_threshold: f64,
