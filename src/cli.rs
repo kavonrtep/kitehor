@@ -463,6 +463,11 @@ pub struct AnalyzeArgs {
     /// the recomputed flag column tracks the cascade.
     #[arg(long, default_value_t = 30.0)]
     pub ssr_flag_threshold_pct: f64,
+    /// Minimum `tv_density` required to promote a
+    /// `localized_subrepeat` hint to `tr_with_subrepeat`. Below this,
+    /// falls through to the natural class. v0.12+.
+    #[arg(long, default_value_t = 0.7)]
+    pub subrepeat_density_min: f64,
 
     /// Optional: write a FASTA-like periodogram bundle alongside the
     /// per-stage TSVs (same format as `kitehor kite-periodicity
@@ -601,6 +606,13 @@ pub struct SummaryMergeArgs {
     /// pure threshold). v0.11+.
     #[arg(long, default_value_t = 30.0)]
     pub ssr_has_pct_threshold: f64,
+    /// Minimum `tv_density` required to promote a
+    /// `localized_subrepeat` hint to `tr_with_subrepeat`. Below this,
+    /// the record falls through to its natural class (rejects indel /
+    /// duplication artifacts that show short-period signal in only a
+    /// few windows). v0.12+.
+    #[arg(long, default_value_t = 0.7)]
+    pub subrepeat_density_min: f64,
 }
 
 #[derive(Debug, Args)]

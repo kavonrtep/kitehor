@@ -48,6 +48,7 @@ fn run_analyze(args: AnalyzeArgs) -> Result<()> {
     cfg.rule.min_tile_copies = args.rule_min_tile_copies;
     cfg.summary.pure_ssr_pct_threshold = args.pure_ssr_pct_threshold;
     cfg.summary.ssr_has_pct_threshold = args.ssr_has_pct_threshold;
+    cfg.summary.subrepeat_density_min = args.subrepeat_density_min;
     cfg.ssr.ssr_flag_threshold_pct = args.ssr_flag_threshold_pct;
     let report =
         kitehor::analyze::run_with(&args.fasta, &args.out, &cfg, args.periodogram.as_deref())?;
@@ -115,6 +116,7 @@ fn run_summary_merge(args: SummaryMergeArgs) -> Result<()> {
     let cfg = kitehor::summary::Config {
         pure_ssr_pct_threshold: args.pure_ssr_pct_threshold,
         ssr_has_pct_threshold: args.ssr_has_pct_threshold,
+        subrepeat_density_min: args.subrepeat_density_min,
     };
     let n = kitehor::summary::run_subcommand(
         &args.verdicts,

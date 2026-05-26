@@ -53,8 +53,8 @@ fn summary_merge_nine_rule_dispatch() {
          r_unres\tunresolved\t\t1\t\t0\t\t\t\t\t\tNA\t0\t0\tno_host\tno_host\n\
          r_unres_ssr\tunresolved\t\t1\t\t0\t\t\t\t\t\tNA\t0\t0\tno_host\tno_host\n\
          r_pure_ssr\tsimple_tr\t60\t1\t\t0\t\t\t\t\t\tNA\t0\t0\tno_candidates\tno_candidates\n\
-         r_sub\thor\t600\t3\t200\t1\tfounder/200:d=0.300:sc=0.500:pc=0.000:localized\t200\tfounder\t0.3\t0.5\t0\t15\t5\tlocalized_subrepeat\tfounder:localized\n\
-         r_sub_ssr\thor\t600\t3\t200\t1\tfounder/200:d=0.300:sc=0.500:pc=0.000:localized\t200\tfounder\t0.3\t0.5\t0\t15\t5\tlocalized_subrepeat\tfounder:localized\n",
+         r_sub\thor\t600\t3\t200\t1\tfounder/200:d=0.800:sc=0.500:pc=0.000:localized\t200\tfounder\t0.8\t0.5\t0\t15\t12\tlocalized_subrepeat\tfounder:localized\n\
+         r_sub_ssr\thor\t600\t3\t200\t1\tfounder/200:d=0.800:sc=0.500:pc=0.000:localized\t200\tfounder\t0.8\t0.5\t0\t15\t12\tlocalized_subrepeat\tfounder:localized\n",
     );
 
     // SSR TSV columns: record_id, length_bp, ssr_flag, dominant_motif,

@@ -53,6 +53,12 @@ pub const TARGET_COLUMNS: &[&str] = &[
     "ssr_raw_total_coverage_pct",
     "ssr_raw_n_regions",
     "ssr_raw_top_motifs",
+    // Diagnostic for the cascade's tr_with_subrepeat gate: percentage
+    // of scanner windows in which the candidate subrepeat motif was
+    // present (`tv_density × 100`). Always emitted, even when no
+    // subrepeat call fires, so the reader can see why the cascade
+    // promoted or rejected a localized_subrepeat hint.
+    "subrepeat_coverage_pct",
     "combined_class",
 ];
 
@@ -112,6 +118,7 @@ fn col_fmt(col: &str) -> ColFmt {
         "ssr_raw_total_coverage_pct" => ColFmt::Float4g,
         "ssr_raw_n_regions" => ColFmt::Int,
         "ssr_raw_top_motifs" => ColFmt::Passthrough,
+        "subrepeat_coverage_pct" => ColFmt::Float4g,
         "combined_class" => ColFmt::Passthrough,
         _ => ColFmt::Passthrough,
     }
@@ -203,8 +210,12 @@ pub fn merge_inputs(
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(0.0);
         let tv_d = r.get("tv_decision").map(String::as_str).unwrap_or("");
-        let cls = combined_class(hor_v, raw_total_pct, tv_d, cfg);
+        let tv_density = r.get("tv_density").and_then(|s| s.parse::<f64>().ok());
+        let cls = combined_class(hor_v, raw_total_pct, tv_d, tv_density, cfg);
         r.insert("combined_class".into(), cls.to_string());
+        if let Some(d) = tv_density {
+            r.insert("subrepeat_coverage_pct".into(), format!("{}", d * 100.0));
+        }
         out_rows.push(r);
     }
 
@@ -213,7 +224,7 @@ pub fn merge_inputs(
         .copied()
         .filter(|c| match *c {
             // Always emitted
-            "record_id" | "combined_class" => true,
+            "record_id" | "combined_class" | "subrepeat_coverage_pct" => true,
             "hor_verdict" | "hor_founder" | "hor_multiplicity" | "hor_tile" | "hor_confidence" => {
                 true
             }
