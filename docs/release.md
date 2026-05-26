@@ -130,6 +130,67 @@ host with glibc < 2.34 (Ubuntu 20.04, CentOS 8, Debian 11). Reported in
 [`docs/kitehor_upstream_issues.md`](kitehor_upstream_issues.md). The
 v0.9.3 release ships the fix.
 
+## v0.11.0 — SSR cascade fix + 2 new classes (breaking)
+
+**Breaking release.** Fixes a `pure_ssr` over-call bug from v0.10
+*and* expands the combined_class enumeration from 7 → 9 so every
+verdict category has a parallel `_with_ssr` partner.
+
+What it ships:
+
+- **fix(summary)**: SSR cascade no longer fires `pure_ssr` for
+  arrays as low as ~4% SSR coverage. Under v0.10 the `ssr-scan`
+  `consensus_single` path (used when the kite top period contains
+  a known SSR motif) overwrote `dominant_motif_coverage_pct` with
+  the candidate monomer's *self*-coverage on a synthetic dimer
+  (~100% by construction), and the cascade's `dom_pct ≥ 80` check
+  then over-triggered. The cascade now reads
+  `ssr_raw_total_coverage_pct` (the array-scale total from the raw
+  scanner) exclusively for all SSR decisions. The per-record
+  `ssr_flag` column is recomputed from the same raw total so it
+  stops contradicting the call. The consensus path's
+  `dominant_motif*` fields remain in `summary.tsv` as informational
+  labels.
+- **feat(summary)**: two new combined_class values so the cascade
+  covers all 4 verdict×SSR combinations: `unresolved_with_ssr`
+  (unresolved + SSR ≥ 30%) and `tr_with_subrepeat_with_ssr`
+  (tandem_validate `localized_subrepeat` + SSR ≥ 30%). The
+  has-SSR threshold is exposed as the new
+  `--ssr-has-pct-threshold` flag on `analyze` + `summary-merge`;
+  default 30% matches `--ssr-flag-threshold-pct` so the
+  recomputed flag and the cascade agree by default.
+- **schema(summary.tsv)**: `ssr_raw_total_coverage_pct` promoted
+  from "optional SSR diagnostic" to always-emitted since it now
+  drives the cascade.
+
+Breaking changes operators need to know:
+
+- `combined_class` may differ from v0.10 for any record that
+  previously fired `pure_ssr` on a consensus_single result. On the
+  IPIP200579 pangenome corpus (3024 records), 53 records moved out
+  of `pure_ssr` (99 → 46); they redistributed into `tr` (+7),
+  `tr_with_ssr` (+10), `unresolved_with_ssr` (new, 78 records),
+  and `tr_with_subrepeat_with_ssr` (new, 2 records).
+- Library `summary::combined_class()` signature changed from
+  `(verdict, ssr_flag, ssr_dom_pct, tv_decision, &cfg)` to
+  `(verdict, ssr_raw_total_pct, tv_decision, &cfg)`.
+- `summary::Config` gains `ssr_has_pct_threshold: f64` (default 30.0).
+- Two new combined_class enum values to handle in downstream code.
+
+Pre-flight passed:
+- 379 unit + integration tests pass, 3 ignored (`cargo test --release --locked`).
+- `cargo clippy --release --all-targets --locked --no-deps -- -D warnings` clean.
+- `cargo fmt --all --check` clean.
+- Local `kitehor --version` reports `0.11.0`.
+
+To ship:
+
+```bash
+git tag v0.11.0
+git push origin main
+git push origin v0.11.0
+```
+
 ## v0.10.0 — unified tandem_validate stage (breaking)
 
 **Breaking release.** The CLI surface lost two subcommands and one
