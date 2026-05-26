@@ -91,7 +91,7 @@ def mutate(seq, sub_rate, indel_rate, rng):
 def simulate_array(monomer_len, hor_order, n_blocks,
                    sub_intra, sub_inter, indel_intra, indel_inter,
                    block_conv, monomer_conv, rng,
-                   submono_k=1):
+                   submono_k=1, subrepeat_region_frac=1.0):
     """Return (monomers, events) for one simulated array.
 
     monomers: list of dicts ``{block_idx, founder_idx, seq}`` in array order.
@@ -103,17 +103,35 @@ def simulate_array(monomer_len, hor_order, n_blocks,
               ``scope == 'monomer'``, indices are flat monomer indices into
               ``monomers``.
 
-    submono_k > 1 builds the base monomer by tiling a smaller random motif
-    of length ``monomer_len // submono_k`` ``submono_k`` times. This injects
-    an internal sub-periodicity inside each monomer; useful for generating
-    arrays where the autocorrelation spectrum has a sub-monomer peak (e.g.
-    at L/4) without there being any biological HOR. Sub-monomer arrays
-    must NOT be called HOR by the detector.
+    Base monomer construction:
+    * ``submono_k <= 1`` (default): a random ``monomer_len``-bp sequence.
+    * ``submono_k >= 2`` and ``subrepeat_region_frac == 1.0`` (default):
+      tile a ``monomer_len // submono_k``-bp random sub-motif over the
+      whole monomer. Result: the SUB-MOTIF is the natural tandem period
+      (kite will pick the sub-motif length, not ``monomer_len``).
+    * ``submono_k >= 2`` and ``subrepeat_region_frac < 1.0``:
+      build a COMPOUND monomer. The first
+      ``subrepeat_region_frac * monomer_len`` bp tile a sub-motif of
+      length ``(subrepeat_region_frac * monomer_len) // submono_k``;
+      the remaining bp are random "unique" sequence (a single fixed
+      tail, NOT regenerated per monomer copy). The full ``monomer_len``
+      becomes the natural period because the unique tail breaks the
+      symmetry the sub-motif alone would create. Models a real
+      tr_with_subrepeat structure (e.g. HSAT-1's internal subrepeat).
     """
     if submono_k >= 2:
-        sub_len = max(1, monomer_len // submono_k)
-        sub_motif = random_dna(sub_len, rng)
-        base = (sub_motif * submono_k)[:monomer_len]
+        if subrepeat_region_frac >= 1.0:
+            sub_len = max(1, monomer_len // submono_k)
+            sub_motif = random_dna(sub_len, rng)
+            base = (sub_motif * submono_k)[:monomer_len]
+        else:
+            subrep_len_total = max(submono_k, int(monomer_len * subrepeat_region_frac))
+            sub_len = max(1, subrep_len_total // submono_k)
+            sub_motif = random_dna(sub_len, rng)
+            subrep_region = (sub_motif * submono_k)[:subrep_len_total]
+            unique_len = monomer_len - len(subrep_region)
+            unique_region = random_dna(unique_len, rng) if unique_len > 0 else ""
+            base = subrep_region + unique_region
     else:
         base = random_dna(monomer_len, rng)
 
@@ -236,6 +254,22 @@ PARAM_FIELDS = (
     "indel_rate_intra", "indel_rate_inter",
     "block_conversions", "monomer_conversions",
     "submono_k", "seed",
+    # Discrete localized indel events (optional, default 0). Unlike
+    # `indel_rate_inter` which applies tiny per-base indels uniformly,
+    # `indel_events` injects N discrete events at random array positions
+    # AFTER monomer construction, each event inserting or deleting a
+    # contiguous block of [indel_event_size_min, indel_event_size_max]
+    # bp. Each event is logged to events.tsv with scope="indel",
+    # source_idx=position, target_idx=signed_size (positive=insertion).
+    "indel_events", "indel_event_size_min", "indel_event_size_max",
+    # Fraction of the monomer occupied by the tiled sub-motif when
+    # submono_k > 1. Default 1.0 = pre-existing behaviour (whole
+    # monomer is the sub-motif tile, kite picks the sub-motif as period).
+    # Values like 0.3-0.7 produce true compound monomers: tile region +
+    # random unique tail. Kite picks the FULL monomer as period when
+    # the tail is long enough; tandem_validate finds the sub-motif as
+    # an internal subrepeat. Models real tr_with_subrepeat biology.
+    "subrepeat_region_frac",
 )
 TRUTH_FIELDS = PARAM_FIELDS + (
     "array_length", "n_monomers",
@@ -261,8 +295,55 @@ def parse_case(row, master_seed):
         "block_conversions": int(row.get("block_conversions") or 0),
         "monomer_conversions": int(row.get("monomer_conversions") or 0),
         "submono_k": int(submono_raw) if submono_raw else 1,
+        "indel_events": int(row.get("indel_events") or 0),
+        "indel_event_size_min": int(row.get("indel_event_size_min") or 5),
+        "indel_event_size_max": int(row.get("indel_event_size_max") or 30),
+        "subrepeat_region_frac": float(row.get("subrepeat_region_frac") or 1.0),
         "seed": seed,
     }
+
+
+def apply_indel_events(seq: str, n_events: int, size_min: int, size_max: int,
+                       rng: random.Random) -> tuple[str, list[dict]]:
+    """Apply `n_events` discrete indels to a sequence. Returns (new_seq, events).
+
+    Each event picks a random position in the (current) sequence, a size
+    in [size_min, size_max], and with 50/50 chance inserts that many random
+    bases at that position OR deletes that many bases starting at that
+    position. Events are applied sequentially so later events see the
+    array length shifted by earlier ones; the logged `position` is the
+    position AT THE TIME the event was applied (i.e., on the post-prior-
+    events array). `target_idx` is the signed event size (positive =
+    insertion, negative = deletion).
+    """
+    events: list[dict] = []
+    if n_events <= 0:
+        return seq, events
+    if size_min < 1:
+        size_min = 1
+    if size_max < size_min:
+        size_max = size_min
+    cur = list(seq)
+    for order in range(n_events):
+        if not cur:
+            break
+        size = rng.randint(size_min, size_max)
+        pos = rng.randint(0, len(cur))
+        if rng.random() < 0.5:
+            # insertion
+            ins = [rng.choice(BASES) for _ in range(size)]
+            cur[pos:pos] = ins
+            signed = size
+        else:
+            # deletion (clamp at end)
+            del_size = min(size, max(0, len(cur) - pos))
+            if del_size <= 0:
+                continue
+            del cur[pos : pos + del_size]
+            signed = -del_size
+        events.append({"event_order": order, "scope": "indel",
+                       "source_idx": pos, "target_idx": signed})
+    return "".join(cur), events
 
 
 def write_fasta_record(fh, name, seq, wrap=60):
@@ -328,10 +409,29 @@ def main():
                 case["block_conversions"], case["monomer_conversions"],
                 rng,
                 submono_k=case["submono_k"],
+                subrepeat_region_frac=case["subrepeat_region_frac"],
             )
             metrics = diagnostic_metrics(monomers, case["hor_order"], rng)
 
             seq = "".join(m["seq"] for m in monomers)
+            # Apply optional discrete indel events AFTER monomer
+            # construction. Monomer coordinates in monomers.tsv refer to
+            # the pre-event sequence; we log post-event positions in
+            # events.tsv. Note: monomer length tracking after indel
+            # events is intentionally NOT updated — for downstream
+            # validation, the indel positions + sizes are sufficient.
+            indel_events = apply_indel_events(
+                seq, case["indel_events"],
+                case["indel_event_size_min"],
+                case["indel_event_size_max"],
+                rng,
+            )
+            seq, ievs = indel_events
+            # Re-order indel event_order indices to follow conversions
+            base_order = len(events)
+            for e in ievs:
+                e["event_order"] = base_order + e["event_order"]
+            events.extend(ievs)
             write_fasta_record(fa, case["case_id"], seq)
 
             truth_row = {**case, "array_length": len(seq),
