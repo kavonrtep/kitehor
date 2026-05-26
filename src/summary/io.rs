@@ -196,13 +196,14 @@ pub fn merge_inputs(
             .get("hor_verdict")
             .map(String::as_str)
             .unwrap_or("unresolved");
-        let ssr_f = r.get("ssr_flag").map(String::as_str).unwrap_or("no");
-        let dom_pct = r
-            .get("ssr_dominant_motif_coverage_pct")
+        // v0.11: cascade reads the array-scale raw total (not the
+        // potentially-inflated consensus-path dominant_motif_coverage_pct).
+        let raw_total_pct = r
+            .get("ssr_raw_total_coverage_pct")
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(0.0);
         let tv_d = r.get("tv_decision").map(String::as_str).unwrap_or("");
-        let cls = combined_class(hor_v, ssr_f, dom_pct, tv_d, cfg);
+        let cls = combined_class(hor_v, raw_total_pct, tv_d, cfg);
         r.insert("combined_class".into(), cls.to_string());
         out_rows.push(r);
     }
@@ -232,14 +233,16 @@ pub fn merge_inputs(
             | "ssr_dominant_motif_repeats"
             | "ssr_dominant_motif_coverage_pct"
             | "ssr_total_coverage_pct"
-            | "ssr_top_motifs" => true,
+            | "ssr_top_motifs"
+            // v0.11: ssr_raw_total_coverage_pct is now load-bearing
+            // for the cascade, so it's always emitted.
+            | "ssr_raw_total_coverage_pct" => true,
             // Optional SSR diagnostic columns — emit only when the source TSV had them.
             "ssr_method"
             | "consensus_period_bp"
             | "consensus_monomer"
             | "ssr_raw_dominant_motif"
             | "ssr_raw_dominant_motif_coverage_pct"
-            | "ssr_raw_total_coverage_pct"
             | "ssr_raw_n_regions"
             | "ssr_raw_top_motifs" => has_ssr_optional.contains(c),
             _ => false,

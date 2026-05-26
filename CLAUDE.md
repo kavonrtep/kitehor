@@ -20,14 +20,27 @@ Sequence-agnostic HOR detector. Three top-level workflows:
    kitehor summary-merge --verdicts ... --tandem-validate ... --ssr ... -o <prefix>
    ```
    `analyze` always emits all 7 per-stage TSVs (debugging contract).
-   The 7 combined_class values: `pure_ssr, tr_with_subrepeat,
-   hor_with_ssr, hor, tr_with_ssr, tr, unresolved`. The unified
-   `tandem-validate` (port of `tools/rule_proto/tandem_validate.py`,
-   spec v5) replaced the prior `subrepeat-scan` + `hor-validate`
-   stages in v0.10; `tr_with_nested_tr` was retired in the same
-   cut (see `docs/new/tandem_validate_spec.md` for the rationale).
-   Earlier retirements: the 4-condition rule (`src/rule.rs`, P1) and
-   the legacy ML pipeline (P6).
+   The 9 combined_class values (v0.11+): `pure_ssr,
+   tr_with_subrepeat_with_ssr, tr_with_subrepeat, hor_with_ssr, hor,
+   tr_with_ssr, tr, unresolved_with_ssr, unresolved`. Every verdict
+   base class has a parallel `_with_ssr` partner that fires when
+   array-scale SSR coverage is ≥30% but below the 80% pure-SSR
+   threshold; both knobs (`--pure-ssr-pct-threshold`,
+   `--ssr-has-pct-threshold`) are exposed on `analyze` +
+   `summary-merge`.
+
+   The unified `tandem-validate` (port of
+   `tools/rule_proto/tandem_validate.py`, spec v5) replaced the
+   prior `subrepeat-scan` + `hor-validate` stages in v0.10;
+   `tr_with_nested_tr` was retired in the same cut (see
+   `docs/new/tandem_validate_spec.md` for the rationale).
+   v0.11 fixed an SSR-cascade bug where the consensus_single path
+   reported the candidate monomer's self-coverage (≈100%) instead
+   of array-scale coverage, causing widespread false `pure_ssr`
+   calls — the cascade now uses `ssr_raw_total_coverage_pct`
+   exclusively for SSR decisions. Earlier retirements: the
+   4-condition rule (`src/rule.rs`, P1) and the legacy ML pipeline
+   (P6).
 
 3. **v2 line-width detector** (`docs/new/detect_spec.md`):
    ```

@@ -21,23 +21,28 @@ tandem-validate              ssr-scan
   └──────────────────────────┘
                  │
                  ▼
-            summary-merge       outer-join + 7-rule combined_class
+            summary-merge       outer-join + 9-rule combined_class
                  │
                  ▼
           <prefix>.summary.tsv
 ```
 
-The seven `combined_class` values:
+The nine `combined_class` values (v0.11+). SSR-driven decisions all
+fire against `ssr_raw_total_coverage_pct` (the array-scale total from
+the raw scanner), against two thresholds:
+`pure_ssr_pct_threshold = 80` and `ssr_has_pct_threshold = 30`.
 
-| Class | Fires when |
-|---|---|
-| `pure_ssr` | `ssr_flag = yes` AND `ssr_dominant_motif_coverage_pct ≥ 80` |
-| `tr_with_subrepeat` | `tv_decision = localized_subrepeat` |
-| `hor_with_ssr` | `hor_verdict = hor` AND `ssr_flag = yes` |
-| `hor` | `hor_verdict = hor` |
-| `tr_with_ssr` | `hor_verdict = simple_tr` AND `ssr_flag = yes` |
-| `tr` | `hor_verdict = simple_tr` |
-| `unresolved` | none of the above |
+| # | Class | Fires when |
+|---|---|---|
+| 1 | `pure_ssr` | `ssr_raw_total_coverage_pct ≥ 80` |
+| 2 | `tr_with_subrepeat_with_ssr` | `tv_decision = localized_subrepeat` AND `ssr_raw_total_coverage_pct ≥ 30` |
+| 3 | `tr_with_subrepeat` | `tv_decision = localized_subrepeat` |
+| 4 | `hor_with_ssr` | `hor_verdict = hor` AND `ssr_raw_total_coverage_pct ≥ 30` |
+| 5 | `hor` | `hor_verdict = hor` |
+| 6 | `tr_with_ssr` | `hor_verdict = simple_tr` AND `ssr_raw_total_coverage_pct ≥ 30` |
+| 7 | `tr` | `hor_verdict = simple_tr` |
+| 8 | `unresolved_with_ssr` | `ssr_raw_total_coverage_pct ≥ 30` (i.e., `unresolved` verdict + SSR) |
+| 9 | `unresolved` | none of the above |
 
 `tr_with_subrepeat` covers what the prior 8-class cascade split between
 `tr_with_nested_tr` (array-scale heterogeneity, found by the old
@@ -47,6 +52,18 @@ tests both scales with one density + spatial / phase-contrast check; see
 [`docs/new/tandem_validate_spec.md`](new/tandem_validate_spec.md) for
 the algorithm and [`docs/new/tandem_validate_port_plan.md`](new/tandem_validate_port_plan.md)
 for the v0.10 retirement notes.
+
+v0.11 closed an SSR cascade bug: under v0.10 the
+`consensus_single` path in `ssr-scan` set
+`dominant_motif_coverage_pct ≈ 100` (the candidate monomer's *self*
+coverage on a synthetic dimer, not the array), and the cascade
+threshold check on that field fired `pure_ssr` for arrays as low as
+~4% SSR. The fix routes the cascade through
+`ssr_raw_total_coverage_pct` (always array-scale) and recomputes the
+`ssr_flag` column from the same raw total so it stops contradicting
+the call. The consensus path's `dominant_motif` / `_length` / etc.
+remain in `summary.tsv` as informational labels for "which short
+motif dominates inside the kite top period".
 
 ## Quick start
 
@@ -238,13 +255,20 @@ prototype.
 
 Outer-join on `record_id` (sorted lexicographically — matches
 pandas's outer-merge behavior in the user's env). Defaults fill
-missing values; the 7-rule decision tree determines
-`combined_class`. Float columns use `%.4g`.
+missing values; the 9-rule decision tree determines
+`combined_class` (v0.11+). Float columns use `%.4g`.
 
 The summary schema dropped the old subrepeat- and hor-validate-prefixed
 columns and gained `tv_*` columns sourced from the new
 `tandem_validate.tsv`. `length_bp` is no longer included; join on
 `record_id` against `<prefix>.kite.tsv` if you need it.
+
+**SSR cascade**: both decision thresholds are exposed as flags
+(`--pure-ssr-pct-threshold = 80`, `--ssr-has-pct-threshold = 30`)
+and read against `ssr_raw_total_coverage_pct` (now an always-emitted
+column in `summary.tsv`, sourced from `ssr.tsv::raw_total_coverage_pct`).
+The cascade never reads `ssr_dominant_motif_coverage_pct` or the
+per-record `ssr_flag` column — those are informational only.
 
 ## Float formatting policy
 

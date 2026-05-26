@@ -323,10 +323,22 @@ pub fn scan_record(
         }
     }
 
+    // v0.11: ssr_flag is recomputed from the array-scale raw total so
+    // it tracks what fraction of the array is actually SSR. The
+    // `auth.ssr_flag` from the consensus_single branch was derived
+    // from the *dimer's* coverage (≈100% by construction) and would
+    // fire `yes` for any array whose kite top period happened to
+    // contain a known SSR motif — see the v0.10→v0.11 fix notes.
+    let array_scale_ssr_flag = if raw.summary.total_ssr_coverage_pct >= cfg.ssr_flag_threshold_pct {
+        "yes".to_string()
+    } else {
+        "no".to_string()
+    };
+
     let summary = SummaryRow {
         record_id: rec_id.to_string(),
         length_bp: seq.len(),
-        ssr_flag: auth.ssr_flag,
+        ssr_flag: array_scale_ssr_flag,
         dominant_motif: auth.dominant_motif,
         dominant_motif_length: auth.dominant_motif_length,
         dominant_motif_repeats: auth.dominant_motif_repeats,

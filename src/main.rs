@@ -46,6 +46,7 @@ fn run_analyze(args: AnalyzeArgs) -> Result<()> {
     cfg.rule.min_period = args.rule_min_period;
     cfg.rule.k_max = args.rule_k_max;
     cfg.summary.pure_ssr_pct_threshold = args.pure_ssr_pct_threshold;
+    cfg.summary.ssr_has_pct_threshold = args.ssr_has_pct_threshold;
     cfg.ssr.ssr_flag_threshold_pct = args.ssr_flag_threshold_pct;
     let report =
         kitehor::analyze::run_with(&args.fasta, &args.out, &cfg, args.periodogram.as_deref())?;
@@ -112,6 +113,7 @@ fn run_ssr_scan(args: SsrScanArgs) -> Result<()> {
 fn run_summary_merge(args: SummaryMergeArgs) -> Result<()> {
     let cfg = kitehor::summary::Config {
         pure_ssr_pct_threshold: args.pure_ssr_pct_threshold,
+        ssr_has_pct_threshold: args.ssr_has_pct_threshold,
     };
     let n = kitehor::summary::run_subcommand(
         &args.verdicts,

@@ -439,8 +439,17 @@ pub struct AnalyzeArgs {
     pub rule_min_period: usize,
     #[arg(long, default_value_t = 30)]
     pub rule_k_max: usize,
+    /// `pure_ssr` fires when `ssr_raw_total_coverage_pct ≥` this.
     #[arg(long, default_value_t = 80.0)]
     pub pure_ssr_pct_threshold: f64,
+    /// `<base>_with_ssr` partner classes fire when
+    /// `ssr_raw_total_coverage_pct ≥` this (but below the pure
+    /// threshold). v0.11+.
+    #[arg(long, default_value_t = 30.0)]
+    pub ssr_has_pct_threshold: f64,
+    /// Per-record `ssr_flag = yes` when raw total SSR coverage of the
+    /// array `≥` this. Default matches `ssr_has_pct_threshold` so
+    /// the recomputed flag column tracks the cascade.
     #[arg(long, default_value_t = 30.0)]
     pub ssr_flag_threshold_pct: f64,
 
@@ -572,9 +581,15 @@ pub struct SummaryMergeArgs {
     /// Output prefix. Writes `<prefix>.summary.tsv`.
     #[arg(short, long, required = true)]
     pub out: PathBuf,
-    /// `pure_ssr` fires when `ssr_dominant_motif_coverage_pct ≥` this.
+    /// `pure_ssr` fires when `ssr_raw_total_coverage_pct ≥` this.
     #[arg(long, default_value_t = 80.0)]
     pub pure_ssr_pct_threshold: f64,
+    /// `<base>_with_ssr` partner classes (`hor_with_ssr`,
+    /// `tr_with_ssr`, `unresolved_with_ssr`, `tr_with_subrepeat_with_ssr`)
+    /// fire when `ssr_raw_total_coverage_pct ≥` this (but below the
+    /// pure threshold). v0.11+.
+    #[arg(long, default_value_t = 30.0)]
+    pub ssr_has_pct_threshold: f64,
 }
 
 #[derive(Debug, Args)]

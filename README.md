@@ -51,7 +51,8 @@ cat out_prefix.summary.tsv      # 32 columns; last is combined_class
 ```
 
 `combined_class` is one of: `hor`, `hor_with_ssr`, `tr`, `tr_with_ssr`,
-`tr_with_subrepeat`, `pure_ssr`, `unresolved`.
+`tr_with_subrepeat`, `tr_with_subrepeat_with_ssr`, `pure_ssr`,
+`unresolved`, `unresolved_with_ssr` (v0.11+).
 
 ### Pipeline at a glance
 
@@ -175,7 +176,7 @@ Design + canonical YAML schema:
 This repo intentionally ships **no real biological FASTA**:
 
 - `test_data/smoke/` — 3-record synthetic fixture for build verification.
-- `test_data/ci_corpus/` — 13-record curated corpus exercising 5/7
+- `test_data/ci_corpus/` — 13-record curated corpus exercising 5/9
   `combined_class` values; provenance in
   [`test_data/ci_corpus/manifest.tsv`](test_data/ci_corpus/manifest.tsv).
 - `tests/synth_configs/` — 23 v2-simulator CI fixtures (T01–T20).
