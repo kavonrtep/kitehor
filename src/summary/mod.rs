@@ -38,7 +38,11 @@ pub struct Config {
     /// `tr_with_subrepeat_with_ssr`. Below this, the record falls
     /// through to its natural class (`tr` / `tr_with_ssr` / etc.) —
     /// rejecting indel / localized-duplication artifacts that show
-    /// short-period signal in only a few windows. Default 0.7.
+    /// short-period signal in only a few windows. Default 0.4
+    /// (lowered from 0.7 in v0.12.1 after the `ground_truth3` simulator
+    /// calibration showed 0.7 missed ~55% of true compound subrepeats
+    /// while 0.4 holds 0% FP on 1100 non-subrepeat controls and
+    /// recovers 80% of true positives).
     pub subrepeat_density_min: f64,
 }
 
@@ -47,7 +51,7 @@ impl Default for Config {
         Self {
             pure_ssr_pct_threshold: 80.0,
             ssr_has_pct_threshold: 30.0,
-            subrepeat_density_min: 0.7,
+            subrepeat_density_min: 0.4,
         }
     }
 }

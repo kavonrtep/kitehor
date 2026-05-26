@@ -465,8 +465,10 @@ pub struct AnalyzeArgs {
     pub ssr_flag_threshold_pct: f64,
     /// Minimum `tv_density` required to promote a
     /// `localized_subrepeat` hint to `tr_with_subrepeat`. Below this,
-    /// falls through to the natural class. v0.12+.
-    #[arg(long, default_value_t = 0.7)]
+    /// falls through to the natural class. v0.12+ (default lowered
+    /// from 0.7 to 0.4 in v0.12.1 — simulator calibration showed 0.7
+    /// missed ~55% of true compound subrepeats).
+    #[arg(long, default_value_t = 0.4)]
     pub subrepeat_density_min: f64,
 
     /// Optional: write a FASTA-like periodogram bundle alongside the
@@ -610,8 +612,8 @@ pub struct SummaryMergeArgs {
     /// `localized_subrepeat` hint to `tr_with_subrepeat`. Below this,
     /// the record falls through to its natural class (rejects indel /
     /// duplication artifacts that show short-period signal in only a
-    /// few windows). v0.12+.
-    #[arg(long, default_value_t = 0.7)]
+    /// few windows). v0.12+. Default lowered from 0.7 to 0.4 in v0.12.1.
+    #[arg(long, default_value_t = 0.4)]
     pub subrepeat_density_min: f64,
 }
 

@@ -1,6 +1,6 @@
 record_id	source	expected_combined_class	notes
 rdna_like	tools/rule_proto/subrepeat/synthetic.fasta	unresolved	rDNA-like host + sub-TR; v5 spec §6 documents long-host nested TR as out-of-scope (rule_classify picks the short monomer)
-small_scale	tools/rule_proto/subrepeat/synthetic.fasta	unresolved	small-scale sub-TR; v0.12 density gate drops it below the tr_with_subrepeat floor (tv_density ≈ 0.52 < 0.7)
+small_scale	tools/rule_proto/subrepeat/synthetic.fasta	tr_with_subrepeat	small-scale sub-TR; tv_density ≈ 0.52 ≥ 0.4 (v0.12.1 default), so passes the gate. Was `unresolved` under v0.12's stricter 0.7 default
 large_scale	tools/rule_proto/subrepeat/synthetic.fasta	tr	large-scale sub-TR; new detector's host/3 ceiling filters the candidate out (out-of-scope per v5 spec §6)
 partial_coverage	tools/rule_proto/subrepeat/synthetic.fasta	unresolved	sub-TR with partial array coverage; v0.12 density gate drops it (tv_density ≈ 0.26 < 0.7) — fixture is now an explicit "partial coverage = artifact" guard
 asymmetric_position	tools/rule_proto/subrepeat/synthetic.fasta	unresolved	sub-TR offset within array; rule_classify returns unresolved so the cascade falls through
