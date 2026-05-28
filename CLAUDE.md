@@ -88,17 +88,23 @@ The legacy ML pipeline (RF + Platt + k-recovery + homology) and its
 CLI flags (`--use-ml-classifier`, `--no-hor-call`, `--hor-*`,
 `--coverage`, etc.) were removed in P6 of the rule-proto port.
 
-5. **Kite peaks rescoring** (`docs/rescore.md`):
+5. **Kite peaks rescoring** ([`docs/rescore.md`](docs/rescore.md);
+   onboarding alongside `report` in
+   [`docs/onboarding_pipelines.md`](docs/onboarding_pipelines.md)):
    ```
    kitehor rescore <fasta>... --peaks <kite.peaks.tsv> -o <prefix>
    ```
-   Appends `identity_med`, `identity_iqr`, `identity_p25`, `identity_n`
-   to a kite peaks TSV. The metric is sampled adjacent-tile pairwise
-   identity (semi-global edit distance, no consensus) — designed to
-   disambiguate HOR-unit from monomer when kite's k-mer score can't
-   separate them. Additive only; downstream stages still drive decisions
-   from `score2_norm`. For large arrays prefer `--top-n` to cap the
-   `O(P²)` per-pair kernel cost on long-period peaks.
+   Appends **9 columns** to a kite peaks TSV: identity stats
+   (`identity_med`, `identity_iqr`, `identity_p25`, `identity_n`),
+   shift diagnostics (`shift_med`, `shift_consistency`), and two
+   derived boolean flags (`phantom`, `subrepeat`) plus the standalone
+   `coverage_frac`. Banded semi-global edit distance kernel with
+   period-relative auto-band (`max(20, 2·slop, ⌈0.02·P⌉)`).
+   Founder-gated subrepeat (must be shorter than the per-record
+   founder) keeps flag rate low (≈ 0.4 % FP on ground_truth_v2).
+   Additive only; downstream stages still drive decisions from
+   `score2_norm`. `--top-n 10` + `--max-period 5000` defaults keep
+   wall time bounded (~3 min on IPIP 2026-04-14, 3024 records).
 
 ## Repo layout shortcut
 
@@ -135,6 +141,9 @@ conda/kitehor/          conda recipe
 docs/                 project docs
   rule_proto.md       ← the rule-proto pipeline (current default)
   rescore.md          ← `kitehor rescore` (kite peaks → identity columns)
+  report.md           ← `kitehor report` (observation-only whole-array TSV)
+  onboarding_pipelines.md
+                      ← cross-pipeline onboarding (rescore + report)
   rule.md             archived — the older 4-condition rule (P1 retirement)
   release.md          ← tag → release pipeline runbook
   irregularity_and_subrepeat_v0_12.md
@@ -157,9 +166,12 @@ All non-README, non-CLAUDE documentation lives in `docs/`. Start with
 [`docs/release.md`](docs/release.md) for the tag → release runbook, locked
 decisions, and the release runbook. Add new topic docs as
 `docs/<topic>.md` siblings; do not scatter markdown at the repo root.
-v2 simulator + detector design docs live in
-[`docs/new/`](docs/new/) — read `simulator_impl_plan.md` §0 first for
-the decisions snapshot and amendments table.
+For the per-peak `rescore` and per-array `report` pipelines, the
+single-file primer is
+[`docs/onboarding_pipelines.md`](docs/onboarding_pipelines.md). v2
+simulator + detector design docs live in [`docs/new/`](docs/new/) —
+read `simulator_impl_plan.md` §0 first for the decisions snapshot and
+amendments table.
 
 ## v2 simulator (`synth*`)
 

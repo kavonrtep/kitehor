@@ -2,13 +2,41 @@
 
 `rescore` adds a nucleotide-level confidence signal to kite's peaks. For
 each candidate period it samples adjacent tile pairs from the array and
-computes their median pairwise identity. The output is kite's peaks TSV
-with four appended columns: `identity_med`, `identity_iqr`,
-`identity_p25`, `identity_n`.
+computes their median pairwise identity, alignment shift, and two
+derived flags. The output is kite's peaks TSV with **9 appended
+columns**: `identity_med`, `identity_iqr`, `identity_p25`, `identity_n`,
+`shift_med`, `shift_consistency`, `phantom`, `subrepeat`, `coverage_frac`.
 
 The metric is **additive only**. Downstream stages (rule-classify,
 analyze) still decide on kite's `score2_norm`; rescore is a diagnostic
 column that downstream analysis can consult independently.
+
+> **Onboarding**: read [`docs/onboarding_pipelines.md`](onboarding_pipelines.md)
+> for a side-by-side view of `rescore` and `report`. This document is
+> the per-flag reference.
+
+## Status
+
+Stable. Six feature drops:
+
+1. **Tier 1** — banded DP kernel, `u16` cells, scratch reuse, runtime
+   logging, CLI defaults (`--top-n 10`, `--max-period 5000`).
+2. **Phantom flag** — `shift_med` / `shift_consistency` derived from
+   the kernel's optimal-column-at-row-m output.
+3. **Subrepeat flag (Step A)** — heuristic derived from
+   `identity_p25 + identity_iqr + identity_med + phantom`.
+4. **Step B** — `coverage_frac` column + refined subrepeat using
+   `coverage_frac ∈ [0.10, 0.50]`.
+5. **Period-relative band** — auto-band scales to `max(20, 2·slop,
+   ⌈0.02·P⌉)` so long monomers don't saturate at the band cap.
+6. **Founder gate** — `subrepeat` post-pass overrides
+   `period ≥ founder_period` rows to `false`; founder is the
+   lowest-rank row with `identity_med ≥ 0.70` and `phantom != true`.
+
+62 unit tests + 2 integration tests cover the kernel, sampler,
+aggregators, and end-to-end behaviour. The two derived flags are
+**mutually exclusive** by construction (the founder gate / phantom
+priority enforces it).
 
 ## Why rescore exists
 

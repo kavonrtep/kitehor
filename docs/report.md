@@ -10,6 +10,26 @@ not trustworthy or you want raw numbers to filter on yourself.
 
 Designed as a sibling to `analyze`. May replace it later.
 
+> **Onboarding**: read [`docs/onboarding_pipelines.md`](onboarding_pipelines.md)
+> for a side-by-side view of `report` and `rescore`. This document is
+> the per-column reference.
+>
+> **Related**: for **per-peak** identity diagnostics (rather than the
+> whole-array snapshot this stage produces), see
+> [`docs/rescore.md`](rescore.md). A typical workflow uses `report`
+> for the array-level triage and `rescore` to drill into specific
+> peaks of interest.
+
+## Status
+
+Stable. The 20-column schema and irregularity flag taxonomy have not
+changed since the v0.12 release; the only addition since then was
+`irreg_dropout_rate_per_pair` (column 19). Field-calibrated against
+dotplots; no automated calibration corpus.
+
+Per-record wall time on the IPIP 2026-04-14 corpus (3024 records,
+305 MB): ~20 ms median, kite-dominated.
+
 ## Usage
 
 ```bash
