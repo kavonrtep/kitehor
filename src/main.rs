@@ -75,6 +75,14 @@ fn run_rescore(args: RescoreArgs) -> Result<()> {
             cov_min: args.subrepeat_cov_min,
             cov_max: args.subrepeat_cov_max,
             founder_id_min: args.subrepeat_founder_id_min,
+            spatial_contrast_min: args.subrepeat_spatial_contrast_min,
+            period_founder_max_ratio: args.subrepeat_period_founder_max_ratio,
+        },
+        kmer_spatial: kitehor::rescore::KmerSpatialConfig {
+            k: args.kmer_spatial_k,
+            distance_tol: args.kmer_spatial_distance_tol,
+            n_bins: 12,
+            min_total_pairs: args.kmer_spatial_min_total_pairs,
         },
         load_qc: LoadQc {
             min_array_bp: args.qc.min_array_bp,

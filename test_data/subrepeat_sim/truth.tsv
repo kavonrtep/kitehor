@@ -1,0 +1,12 @@
+record_id	base_type	expected_subrepeat	true_founder_bp	true_tile_bp	n_tile_in_array	true_subrepeat_motif_bp	true_subrepeat_copies	subrepeat_occupancy_frac	array_length_bp
+C01_tr_clean	TR	false	180	180	167	NA	0	0.0	30106
+C02_hor_clean	HOR3	false	100	300	100	NA	0	0.0	30000
+C10_tr_clean_v2	TR	false	180	180	167	NA	0	0.0	30026
+C11_tr_jitter	TR_JITTER	false	2000	2000	15	NA	0	0.0	30058
+C03_tr_sub36_x1	TR	borderline	180	180	167	36	1	0.2	30049
+C04_tr_sub36_x2	TR	true	180	180	167	36	2	0.4	30074
+C05_tr_sub36_x3	TR	true	180	180	167	36	3	0.6	30054
+C06_tr_sub36_x4	TR	true	180	180	167	36	4	0.8	30047
+C07_tr_sub36_x5	TR	degenerate	180	180	167	36	5	1.0	30045
+C08_tr_300_sub60_x2	TR	true	300	300	101	60	2	0.4	30262
+C09_hor_sub30_x2	HOR3	true	100	300	100	30	2	0.6	30000

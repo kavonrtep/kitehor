@@ -183,7 +183,46 @@ What it ships:
   density. Detail: [`docs/irregularity_and_subrepeat_v0_12.md`](irregularity_and_subrepeat_v0_12.md) §1.
 - **feat(simulator)**: legacy `simulate` gains discrete indel
   events and compound subrepeat monomers; useful for stress-
-  testing the new irregularity backend on known event tracks.
+  testing the new irregularity backend on known event tracks. A
+  dedicated subrepeat-injection prototype landed under
+  [`tools/subrepeat_sim/`](../tools/subrepeat_sim/) — generates
+  11 synthetic cases with controlled per-copy divergence and
+  boundary jitter, used to calibrate the new k-mer-positional
+  diagnostics described below.
+- **feat(rescore) — period/founder ratio gate**: a real subrepeat
+  must tile multiple times inside one founder, so its period must
+  be much shorter than the founder's. Added
+  `--subrepeat-period-founder-max-ratio` (default 0.25 — tiles
+  ≥ 4 times). Suppresses the "slow phase drift" class of
+  near-founder harmonics that the bimodality + spatial-contrast
+  gates can't catch (TRC_115:chr7_353599568 P=1955 in founder
+  P=2018, ratio 0.97). On the IPIP200579 2026-04-14 corpus
+  (3024 records, 52,510 peaks) `subrepeat=true` drops from
+  909 (v0.11) → 703 (spatial gate only) → 319 (with the ratio
+  gate) — a 65 % FP reduction vs v0.11.
+- **feat(rescore) — `founder_period` column**: the per-record
+  founder period the gate uses is now exposed as the 11th appended
+  column. Same value across every row of one record; `NA` when no
+  peak in the record met `identity_med ≥ subrepeat_founder_id_min`
+  and `phantom != true`. Audit-friendly.
+- **feat(rescore) — k-mer-positional diagnostics**: two new
+  observational columns from a new `kmer_scan` module operating on
+  the per-record k-mer position list (no extra alignment cost):
+  - `kmer_autocorr_founder` (col 12): autocorrelation of the
+    sliding-window pair-density profile at lag = `founder_period`.
+    High when density(x) oscillates with the founder period (real
+    nested subrepeat in every founder copy).
+  - `kmer_phase_contrast` (col 13): folded-density max-contiguous-
+    half-fraction-excess. High when midpoints prefer one half of
+    the founder cycle (TRC_104-style: subrepeat fills the dominant
+    half of every founder).
+  Both are observational; they do NOT gate the `subrepeat` flag in
+  this release. Calibration: on the IPIP corpus, 94 % of currently-
+  flagged subrepeats have at least one of `autoF ≥ 0.4` OR
+  `phaseC ≥ 0.10` — the two metrics are strongly complementary
+  (autoF is noise-tolerant on long arrays, phaseC is robust on
+  short arrays). Per-row interpretation guide in
+  [`docs/rescore.md`](rescore.md).
 - **docs**: every subcommand now has a reference page with
   per-column descriptions for every TSV it emits:
   - [`docs/rule_proto.md`](rule_proto.md) — 7-stage column tables
@@ -200,6 +239,10 @@ What it ships:
   - `README.md` subcommand table updated to link every reference
 - **schema(summary.tsv)**: gains `subrepeat_coverage_pct` (column
   32). Column count: 32 → 33. Existing column indices unchanged.
+- **schema(rescore peaks TSV)**: 9 appended columns → **13**
+  (adds `spatial_contrast`, `founder_period`,
+  `kmer_autocorr_founder`, `kmer_phase_contrast`). Existing
+  column indices unchanged.
 
 Non-breaking notes for operators:
 
@@ -217,7 +260,7 @@ Non-breaking notes for operators:
   via `--subrepeat-density-min 0` to restore v0.11 behaviour.
 
 Pre-flight passed:
-- 403 unit + integration tests pass, 1 ignored
+- 420 unit + integration tests pass, 1 ignored
   (`tandem_validate_python_parity`, opt-in;
   `cargo test --release --locked`).
 - `cargo clippy --release --all-targets --locked --no-deps -- -D warnings` clean.

@@ -865,6 +865,43 @@ pub struct RescoreArgs {
     #[arg(long, default_value_t = 0.70)]
     pub subrepeat_founder_id_min: f64,
 
+    /// Subrepeat flag minimum `spatial_contrast`: high-identity
+    /// pairs must be clustered in a few array bins (real localised
+    /// subrepeat) rather than scattered uniformly (near-founder
+    /// harmonic). Computed by binning anchor offsets into 10 equal
+    /// bins, taking the per-bin hit fraction, and reporting
+    /// max − min. Default 0.40.
+    #[arg(long, default_value_t = 0.40)]
+    pub subrepeat_spatial_contrast_min: f64,
+
+    /// Subrepeat flag maximum `period / founder_period`: a real
+    /// subrepeat must tile multiple times inside one founder
+    /// monomer, so its period must be much shorter than the
+    /// founder. Default 0.25 (tiles ≥ 4 times). Applied as part
+    /// of the founder-gate post-pass; rows with `period > founder ·
+    /// max_ratio` have `subrepeat` overridden to `false`.
+    #[arg(long, default_value_t = 0.25)]
+    pub subrepeat_period_founder_max_ratio: f64,
+
+    /// K-mer length for the `kmer_spatial_contrast` diagnostic.
+    /// Should match the kite `--kmer-size` used to detect the input
+    /// peaks (default 6). Set to 0 to disable the diagnostic; rows
+    /// will then report `NA` for `kmer_spatial_contrast`.
+    #[arg(long, default_value_t = 6)]
+    pub kmer_spatial_k: usize,
+
+    /// Distance tolerance (bp) for matching consecutive k-mer pairs
+    /// to the candidate period in the `kmer_spatial_contrast`
+    /// diagnostic. Default 3.
+    #[arg(long, default_value_t = 3)]
+    pub kmer_spatial_distance_tol: usize,
+
+    /// Minimum number of matching k-mer pairs required for the
+    /// `kmer_spatial_contrast` diagnostic to return a value; below
+    /// this the column reports `NA`. Default 20.
+    #[arg(long, default_value_t = 20)]
+    pub kmer_spatial_min_total_pairs: usize,
+
     #[command(flatten)]
     pub qc: QcOpts,
 

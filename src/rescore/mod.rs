@@ -15,6 +15,7 @@
 
 pub mod aligner;
 pub mod io;
+pub mod kmer_scan;
 pub mod sample;
 
 use crate::io::{load_fasta, LoadQc, LoadStatus};
@@ -89,7 +90,79 @@ pub struct SubrepeatConfig {
     /// founder when applying the founder gate (subrepeat must have
     /// period < founder period). Default 0.70.
     pub founder_id_min: f64,
+    /// Subrepeat flag minimum `spatial_contrast` — separates a
+    /// localized motif (hits clustered in some array bins) from a
+    /// near-founder harmonic (hits scattered uniformly across bins).
+    /// Default 0.40.
+    pub spatial_contrast_min: f64,
+    /// Subrepeat flag maximum `period / founder_period` — a real
+    /// subrepeat must tile **multiple times** inside one founder
+    /// monomer, so its period has to be much shorter than the
+    /// founder's. Default 0.25 (tiles ≥ 4 times inside the founder),
+    /// which suppresses the slow-phase-drift class of near-founder
+    /// harmonics that the bimodality + spatial gates can't catch
+    /// (TRC_115-style false positives). Applied as part of the
+    /// founder-gate post-pass.
+    pub period_founder_max_ratio: f64,
 }
+
+/// Per-stage configuration for the founder-aware k-mer-pair
+/// diagnostics (`kmer_autocorr_founder`, `kmer_phase_contrast`).
+/// Both metrics are observational in this release — they appear as
+/// TSV columns but do not gate the `subrepeat` flag. The structure
+/// is independent of `SubrepeatConfig` so a future release can
+/// promote one of them to a gate without restructuring config.
+#[derive(Debug, Clone, Copy)]
+pub struct KmerSpatialConfig {
+    /// K-mer length. **Must match the kite k used to detect the
+    /// peaks** for the metric to make sense (default 6, matching
+    /// `kite.R`). `0` disables computation entirely — every row
+    /// reports `NA` for `kmer_autocorr_founder` and
+    /// `kmer_phase_contrast`.
+    pub k: usize,
+    /// Absolute distance tolerance (bp). A consecutive k-mer pair
+    /// at distance `d` contributes iff `|d − period| ≤ distance_tol`.
+    /// Default 3.
+    pub distance_tol: usize,
+    /// Number of equal-width phase bins for the
+    /// `kmer_phase_contrast` statistic. Even number so the
+    /// "contiguous half" calculation is unambiguous. Default 12 —
+    /// each bin covers `founder_period / 12` bp; for typical
+    /// centromeric founders of 150–250 bp that's 12–20 bp per bin,
+    /// fine enough to resolve a half-founder oscillation and coarse
+    /// enough that ±5 bp boundary jitter doesn't cross more than
+    /// one bin boundary.
+    pub n_bins: usize,
+    /// Minimum number of matching pairs required to compute the
+    /// founder-aware k-mer metrics. Below this both
+    /// `kmer_autocorr_founder` and `kmer_phase_contrast` are `NA`.
+    /// Default 20.
+    pub min_total_pairs: usize,
+}
+
+impl Default for KmerSpatialConfig {
+    fn default() -> Self {
+        Self {
+            k: 6,
+            distance_tol: 3,
+            n_bins: 12,
+            min_total_pairs: 20,
+        }
+    }
+}
+
+/// Number of equal-width anchor-offset bins used by the
+/// `spatial_contrast` statistic. Fixed at 10 to mirror
+/// `tandem-validate`'s position binning convention.
+pub const SPATIAL_N_BINS: usize = 10;
+
+/// Minimum number of sampled pairs that must land in a bin for the
+/// bin to contribute to the `spatial_contrast` max/min computation.
+/// Bins below this threshold are dropped so a single under-sampled
+/// bin can't drag the contrast statistic in either direction. With
+/// default `--samples 200`, expected per-bin count is ~20, so 5 is
+/// permissive.
+pub const SPATIAL_MIN_PAIRS_PER_BIN: usize = 5;
 
 impl Default for SubrepeatConfig {
     fn default() -> Self {
@@ -101,6 +174,8 @@ impl Default for SubrepeatConfig {
             cov_min: 0.10,
             cov_max: 0.50,
             founder_id_min: 0.70,
+            spatial_contrast_min: 0.40,
+            period_founder_max_ratio: 0.25,
         }
     }
 }
@@ -126,6 +201,7 @@ pub struct Config {
     pub scoring: aligner::ScoringConfig,
     pub phantom: PhantomConfig,
     pub subrepeat: SubrepeatConfig,
+    pub kmer_spatial: KmerSpatialConfig,
     pub load_qc: LoadQc,
     pub force: bool,
 }
@@ -145,6 +221,7 @@ impl Default for Config {
             scoring: aligner::ScoringConfig::default(),
             phantom: PhantomConfig::default(),
             subrepeat: SubrepeatConfig::default(),
+            kmer_spatial: KmerSpatialConfig::default(),
             load_qc: LoadQc::default(),
             force: false,
         }
@@ -212,6 +289,41 @@ pub struct RowStats {
     /// `SubrepeatConfig::coverage_threshold`. Independent diagnostic of
     /// what fraction of the array the candidate period actually tiles.
     pub coverage_frac: Option<f64>,
+    /// Spatial coherence of the high-identity pairs across the array.
+    /// Computed by binning anchor offsets into `SPATIAL_N_BINS` equal
+    /// bins, taking the per-bin hit-fraction (pairs with
+    /// `identity ≥ SubrepeatConfig::coverage_threshold` divided by the
+    /// number of sampled pairs in the bin), and reporting
+    /// `max_bin_hit_fraction − min_bin_hit_fraction` over bins that
+    /// have at least `SPATIAL_MIN_PAIRS_PER_BIN` samples. High
+    /// (≈ 1) when hits cluster in a few bins (real localised
+    /// subrepeat); low (≈ 0) when hits are uniform across bins
+    /// (near-founder harmonic / phase-modulated scatter). `None`
+    /// when fewer than 2 bins meet the minimum-pairs threshold.
+    pub spatial_contrast: Option<f64>,
+    /// Per-record founder period (bp) used by the founder gate, or
+    /// `None` when no row in this record met the
+    /// `SubrepeatConfig::founder_id_min` + non-phantom requirements.
+    /// Same value across every row of the same record. Exposed for
+    /// downstream auditing of the gate.
+    pub founder_period: Option<usize>,
+    /// Autocorrelation of the period-`period` k-mer pair density
+    /// profile at lag = `founder_period`. Captures the nested
+    /// subrepeat signature: a real subrepeat inside the founder
+    /// makes density(x) oscillate with period = founder, producing
+    /// a strong positive autocorrelation at that lag. See
+    /// [`kmer_scan::kmer_density_autocorr_at_founder`].
+    /// **Observational only**; does not gate the `subrepeat` flag
+    /// in this release. `None` until the founder gate post-pass
+    /// fills `founder_period`.
+    pub kmer_autocorr_founder: Option<f64>,
+    /// Phase-folded contrast of the period-`period` k-mer pair
+    /// density: bin midpoints by `(mid mod founder_period)` into
+    /// N phase bins, report `max − min` of the bin fractions.
+    /// Jitter-robust alternative to `kmer_autocorr_founder` — see
+    /// [`kmer_scan::kmer_phase_folded_contrast`]. **Observational
+    /// only** in this release.
+    pub kmer_phase_contrast: Option<f64>,
 }
 
 impl RowStats {
@@ -226,6 +338,10 @@ impl RowStats {
             phantom: None,
             subrepeat: None,
             coverage_frac: None,
+            spatial_contrast: None,
+            founder_period: None,
+            kmer_autocorr_founder: None,
+            kmer_phase_contrast: None,
         }
     }
 
@@ -235,9 +351,10 @@ impl RowStats {
                 .unwrap_or_else(|| "NA".into())
         };
         let fi = |o: Option<i32>| o.map(|v| v.to_string()).unwrap_or_else(|| "NA".into());
+        let fu = |o: Option<usize>| o.map(|v| v.to_string()).unwrap_or_else(|| "NA".into());
         let fb = |o: Option<bool>| o.map(|v| v.to_string()).unwrap_or_else(|| "NA".into());
         format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             f(self.identity_med),
             f(self.identity_iqr),
             f(self.identity_p25),
@@ -247,6 +364,10 @@ impl RowStats {
             fb(self.phantom),
             fb(self.subrepeat),
             f(self.coverage_frac),
+            f(self.spatial_contrast),
+            fu(self.founder_period),
+            f(self.kmer_autocorr_founder),
+            f(self.kmer_phase_contrast),
         )
     }
 }
@@ -287,6 +408,25 @@ pub fn run_subcommand(
             }
         }
     }
+
+    // Per-record k-mer position maps for the founder-aware k-mer
+    // diagnostics (kmer_autocorr_founder + kmer_phase_contrast).
+    // Built once per record so per-(record, period) rows can query
+    // in O(positions) instead of re-scanning the array. Empty when
+    // --kmer-spatial-k=0 (disabled).
+    let kmer_positions: AHashMap<String, kmer_scan::KmerPositions> = if cfg.kmer_spatial.k > 0 {
+        records
+            .iter()
+            .map(|(id, rec)| {
+                (
+                    id.clone(),
+                    kmer_scan::build_kmer_positions(&rec.seq, cfg.kmer_spatial.k),
+                )
+            })
+            .collect()
+    } else {
+        AHashMap::new()
+    };
 
     let loaded = io::load_peaks(peaks_in)?;
     let sample_cfg = cfg.sample_cfg();
@@ -349,7 +489,7 @@ pub fn run_subcommand(
         cfg.phantom.consistency_min,
     );
     info!(
-        "rescore: subrepeat_flag p75_min={} iqr_min={} med_max={} coverage_threshold={} cov_min={} cov_max={} founder_id_min={}",
+        "rescore: subrepeat_flag p75_min={} iqr_min={} med_max={} coverage_threshold={} cov_min={} cov_max={} founder_id_min={} spatial_contrast_min={} period_founder_max_ratio={}",
         cfg.subrepeat.p75_min,
         cfg.subrepeat.iqr_min,
         cfg.subrepeat.med_max,
@@ -357,6 +497,20 @@ pub fn run_subcommand(
         cfg.subrepeat.cov_min,
         cfg.subrepeat.cov_max,
         cfg.subrepeat.founder_id_min,
+        cfg.subrepeat.spatial_contrast_min,
+        cfg.subrepeat.period_founder_max_ratio,
+    );
+    info!(
+        "rescore: kmer_spatial k={} distance_tol={} n_bins={} min_total_pairs={}{}",
+        cfg.kmer_spatial.k,
+        cfg.kmer_spatial.distance_tol,
+        cfg.kmer_spatial.n_bins,
+        cfg.kmer_spatial.min_total_pairs,
+        if cfg.kmer_spatial.k == 0 {
+            " (disabled)"
+        } else {
+            ""
+        },
     );
 
     let start = Instant::now();
@@ -425,11 +579,54 @@ pub fn run_subcommand(
 
     let total_elapsed = start.elapsed();
 
-    // Founder gate: subrepeat must have period < founder period within
-    // the same record. Founder = lowest-rank row with identity_med ≥
-    // subrepeat.founder_id_min AND phantom != true.
-    let founder_overrides =
-        enforce_subrepeat_founder_gate(&loaded.rows, &mut stats, cfg.subrepeat.founder_id_min);
+    // Founder gate: a real subrepeat tiles multiple times inside the
+    // founder, so its period must be at most `founder_period ·
+    // period_founder_max_ratio`. Founder = lowest-rank row with
+    // identity_med ≥ subrepeat.founder_id_min AND phantom != true.
+    let founder_overrides = enforce_subrepeat_founder_gate(
+        &loaded.rows,
+        &mut stats,
+        cfg.subrepeat.founder_id_min,
+        cfg.subrepeat.period_founder_max_ratio,
+    );
+
+    // Post-pass: now that founder_period is filled on every row, we
+    // can compute the autocorrelation-at-founder-lag of the period-P
+    // k-mer pair density profile. Only rows with both a known founder
+    // AND a previously-rescored body have a meaningful answer.
+    if cfg.kmer_spatial.k > 0 {
+        stats
+            .par_iter_mut()
+            .zip(loaded.rows.par_iter())
+            .for_each(|(stat, row)| {
+                if stat.founder_period.is_none() {
+                    return;
+                }
+                let Some(record) = records.get(&row.case_id) else {
+                    return;
+                };
+                let Some(positions) = kmer_positions.get(&row.case_id) else {
+                    return;
+                };
+                stat.kmer_autocorr_founder = kmer_scan::kmer_density_autocorr_at_founder(
+                    positions,
+                    record.seq.len(),
+                    row.period,
+                    stat.founder_period,
+                    cfg.kmer_spatial.distance_tol,
+                    cfg.kmer_spatial.min_total_pairs,
+                );
+                stat.kmer_phase_contrast = kmer_scan::kmer_phase_folded_contrast(
+                    positions,
+                    record.seq.len(),
+                    row.period,
+                    stat.founder_period,
+                    cfg.kmer_spatial.distance_tol,
+                    cfg.kmer_spatial.n_bins,
+                    cfg.kmer_spatial.min_total_pairs,
+                );
+            });
+    }
 
     let total_na = stats.iter().filter(|s| s.identity_med.is_none()).count();
     let filtered = n_rows.saturating_sub(n_to_rescore);
@@ -455,7 +652,7 @@ pub fn run_subcommand(
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "{}\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n\tshift_med\tshift_consistency\tphantom\tsubrepeat\tcoverage_frac",
+        "{}\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n\tshift_med\tshift_consistency\tphantom\tsubrepeat\tcoverage_frac\tspatial_contrast\tfounder_period\tkmer_autocorr_founder\tkmer_phase_contrast",
         loaded.header
     )?;
     for (row, s) in loaded.rows.iter().zip(stats.iter()) {
@@ -503,8 +700,24 @@ pub fn rescore_one(
         })
         .collect();
 
+    let ids_unsorted: Vec<f64> = per_pair.iter().map(|(id, _)| *id).collect();
+
+    // Spatial contrast: bin pairs by anchor offset, compute hit
+    // fractions per bin, return max−min over qualifying bins.
+    // Done before sorting `ids` to preserve pair↔anchor pairing.
+    let spatial_contrast = spatial_contrast_from_pairs(
+        &pairs,
+        &ids_unsorted,
+        seq.len(),
+        period,
+        cfg.slop,
+        subrepeat_cfg.coverage_threshold,
+        SPATIAL_N_BINS,
+        SPATIAL_MIN_PAIRS_PER_BIN,
+    );
+
     // Identity aggregate over all K pairs (unchanged behaviour).
-    let mut ids: Vec<f64> = per_pair.iter().map(|(id, _)| *id).collect();
+    let mut ids = ids_unsorted;
     ids.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let med = quantile_sorted(&ids, 0.5);
     let p25 = quantile_sorted(&ids, 0.25);
@@ -522,7 +735,15 @@ pub fn rescore_one(
             .count() as f64
             / ids.len() as f64
     };
-    let subrepeat = subrepeat_flag(med, iqr, p75, coverage_frac, phantom, subrepeat_cfg);
+    let subrepeat = subrepeat_flag(
+        med,
+        iqr,
+        p75,
+        coverage_frac,
+        spatial_contrast,
+        phantom,
+        subrepeat_cfg,
+    );
 
     RowStats {
         identity_med: Some(med),
@@ -534,22 +755,38 @@ pub fn rescore_one(
         phantom,
         subrepeat,
         coverage_frac: Some(coverage_frac),
+        spatial_contrast,
+        founder_period: None,
+        kmer_autocorr_founder: None,
+        kmer_phase_contrast: None,
     }
 }
 
 /// Apply the founder gate: for each record, identify the lowest-rank
 /// "founder" row (identity_med ≥ `founder_id_min` AND `phantom != true`)
-/// and override `subrepeat` to `Some(false)` on any row whose period is
-/// not strictly below that founder's period. By construction a subrepeat
-/// is shorter than the founder monomer; this catches the false-positives
-/// we'd otherwise emit on long-period bimodal rows (kite harmonics that
-/// happen to look bimodal across the array).
+/// and override `subrepeat` to `Some(false)` on any row whose period
+/// exceeds `founder_period · period_founder_max_ratio`. A real
+/// subrepeat tiles multiple times inside one founder monomer
+/// (`tiles ≈ 1 / period_founder_max_ratio`), so its period has to
+/// be much shorter than the founder. With the default 0.25 this
+/// requires `period ≤ founder / 4`. Catches:
+///   1. long-period harmonics where the bimodality is real but the
+///      candidate is just a multiple of the founder
+///      (`period ≫ founder`), and
+///   2. near-founder candidates where the slow phase drift accidentally
+///      clusters hits and beats the spatial-contrast gate
+///      (`period ≈ 0.95–0.99 · founder`).
 ///
 /// Returns the number of subrepeat rows that were overridden.
+///
+/// Also populates `founder_period` on **every** row in the record
+/// (whether or not it was a subrepeat candidate) so the gate is
+/// auditable from the output TSV.
 fn enforce_subrepeat_founder_gate(
     rows: &[io::RawRow],
     stats: &mut [RowStats],
     founder_id_min: f64,
+    period_founder_max_ratio: f64,
 ) -> usize {
     // First pass: build case_id → (lowest_rank, period) of qualifying founder.
     let mut founders: AHashMap<&str, (usize, usize)> = AHashMap::new();
@@ -568,15 +805,20 @@ fn enforce_subrepeat_founder_gate(
         }
     }
 
-    // Second pass: override subrepeat where the candidate period is not
-    // strictly below the founder.
+    // Second pass: fill `founder_period` on every row (diagnostic;
+    // same value across all rows of one record) and override
+    // `subrepeat` where the candidate period is too close to the
+    // founder period (period > founder · max_ratio).
     let mut overridden = 0usize;
     for (row, stat) in rows.iter().zip(stats.iter_mut()) {
+        let founder_p_opt = founders.get(row.case_id.as_str()).map(|&(_, p)| p);
+        stat.founder_period = founder_p_opt;
         if !matches!(stat.subrepeat, Some(true)) {
             continue;
         }
-        if let Some(&(_, founder_p)) = founders.get(row.case_id.as_str()) {
-            if row.period >= founder_p {
+        if let Some(founder_p) = founder_p_opt {
+            let cap = (founder_p as f64) * period_founder_max_ratio;
+            if (row.period as f64) > cap {
                 stat.subrepeat = Some(false);
                 overridden += 1;
             }
@@ -586,25 +828,113 @@ fn enforce_subrepeat_founder_gate(
 }
 
 /// Subrepeat heuristic: bimodal identity distribution + intermediate
-/// coverage + not phantom + not a real period.
+/// coverage + spatially clustered hits + not phantom + not a real
+/// period.
+///
+/// The `spatial_contrast` gate is the key discriminator between a
+/// real localised motif (high contrast — most hits cluster in a few
+/// array bins) and a near-founder harmonic (low contrast — hits
+/// scattered uniformly across the array because of cumulative
+/// alignment phase drift). When `spatial_contrast` is `None` (too
+/// few bins met the per-bin minimum count), we cannot tell, so the
+/// flag is reported as `None` rather than `false`.
 fn subrepeat_flag(
     med: f64,
     iqr: f64,
     p75: f64,
     coverage_frac: f64,
+    spatial_contrast: Option<f64>,
     phantom: Option<bool>,
     cfg: &SubrepeatConfig,
 ) -> Option<bool> {
     if matches!(phantom, Some(true)) {
         return Some(false);
     }
+    let sc = spatial_contrast?;
     Some(
         p75 >= cfg.p75_min
             && iqr >= cfg.iqr_min
             && med < cfg.med_max
             && coverage_frac >= cfg.cov_min
-            && coverage_frac <= cfg.cov_max,
+            && coverage_frac <= cfg.cov_max
+            && sc >= cfg.spatial_contrast_min,
     )
+}
+
+/// Spatial-contrast statistic for the per-pair identities.
+///
+/// Bins the anchor-offset axis into `n_bins` equal-width bins. For
+/// each bin that contains at least `min_pairs_per_bin` sampled pairs,
+/// computes the hit fraction (pairs with `identity ≥ threshold` /
+/// total pairs in the bin). Returns
+/// `max(hit_fraction) − min(hit_fraction)` over the qualifying bins,
+/// or `None` when fewer than 2 bins qualify.
+///
+/// Interpretation:
+/// - Real localised subrepeat → most pairs land at a few bins with
+///   hit fraction ≈ 1, the rest at ≈ 0 → contrast close to 1.
+/// - Near-founder harmonic → every bin has roughly the same hit
+///   fraction (≈ overall `coverage_frac`) → contrast close to 0.
+///
+/// `period` and `slop` are needed because the sampler draws anchor
+/// offsets uniformly from `[0, array_len − 2·period − slop]`, which
+/// defines the bin edges.
+#[allow(clippy::too_many_arguments)]
+fn spatial_contrast_from_pairs(
+    pairs: &[sample::Pair],
+    ids: &[f64],
+    array_len: usize,
+    period: usize,
+    slop: usize,
+    threshold: f64,
+    n_bins: usize,
+    min_pairs_per_bin: usize,
+) -> Option<f64> {
+    if pairs.is_empty() || pairs.len() != ids.len() || n_bins == 0 {
+        return None;
+    }
+    let span = 2 * period + slop;
+    if array_len < span {
+        return None;
+    }
+    let max_anchor = array_len - span; // inclusive upper bound on anchor offset
+    if max_anchor == 0 {
+        return None;
+    }
+    let bin_width = max_anchor + 1; // anchors live in [0, max_anchor] inclusive
+    let mut n_in_bin = vec![0usize; n_bins];
+    let mut hits_in_bin = vec![0usize; n_bins];
+    for (p, id) in pairs.iter().zip(ids.iter()) {
+        // Map anchor offset into [0, n_bins). Clamp the rightmost
+        // anchor (== max_anchor) into the top bin so we don't get a
+        // single-pair sentinel bin.
+        let b_raw = (p.a_start.saturating_mul(n_bins)) / bin_width;
+        let b = b_raw.min(n_bins - 1);
+        n_in_bin[b] += 1;
+        if *id >= threshold {
+            hits_in_bin[b] += 1;
+        }
+    }
+    let fracs: Vec<f64> = n_in_bin
+        .iter()
+        .zip(hits_in_bin.iter())
+        .filter(|(n, _)| **n >= min_pairs_per_bin)
+        .map(|(n, h)| (*h as f64) / (*n as f64))
+        .collect();
+    if fracs.len() < 2 {
+        return None;
+    }
+    let mut lo = fracs[0];
+    let mut hi = fracs[0];
+    for v in &fracs[1..] {
+        if *v < lo {
+            lo = *v;
+        }
+        if *v > hi {
+            hi = *v;
+        }
+    }
+    Some(hi - lo)
 }
 
 /// Aggregate per-pair shifts into (shift_med, shift_consistency, phantom).
@@ -662,17 +992,25 @@ mod tests {
     #[test]
     fn na_row_formats_as_na() {
         let s = RowStats::na();
-        assert_eq!(s.format_row(), "NA\tNA\tNA\t0\tNA\tNA\tNA\tNA\tNA");
+        assert_eq!(
+            s.format_row(),
+            "NA\tNA\tNA\t0\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA"
+        );
     }
 
     // --- subrepeat heuristic -----------------------------------------------
 
+    /// Spatial-contrast value that comfortably passes the default 0.40 gate.
+    /// Used by the bimodality-focused unit tests so they don't have to also
+    /// thread a believable contrast value.
+    const HIGH_SC: Option<f64> = Some(0.85);
+
     #[test]
     fn subrepeat_flag_classic_bimodal_fires() {
-        // Wide IQR + moderate median + high p75 + intermediate coverage,
-        // not phantom.
+        // Wide IQR + moderate median + high p75 + intermediate coverage +
+        // high spatial contrast, not phantom.
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.30, Some(false), &cfg);
+        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.30, HIGH_SC, Some(false), &cfg);
         assert_eq!(r, Some(true));
     }
 
@@ -680,7 +1018,7 @@ mod tests {
     fn subrepeat_flag_phantom_blocks_subrepeat() {
         // Same bimodal stats but the row is already a phantom: never flag.
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.30, Some(true), &cfg);
+        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.30, HIGH_SC, Some(true), &cfg);
         assert_eq!(r, Some(false));
     }
 
@@ -688,7 +1026,7 @@ mod tests {
     fn subrepeat_flag_real_period_does_not_fire() {
         // High median ⇒ real period; med_max gate blocks subrepeat.
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.95, 0.05, 0.97, 0.95, Some(false), &cfg);
+        let r = subrepeat_flag(0.95, 0.05, 0.97, 0.95, HIGH_SC, Some(false), &cfg);
         assert_eq!(r, Some(false));
     }
 
@@ -696,7 +1034,7 @@ mod tests {
     fn subrepeat_flag_noise_does_not_fire() {
         // Uniformly low identity, narrow IQR ⇒ noise; p75/iqr gates block.
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.42, 0.07, 0.46, 0.0, Some(false), &cfg);
+        let r = subrepeat_flag(0.42, 0.07, 0.46, 0.0, HIGH_SC, Some(false), &cfg);
         assert_eq!(r, Some(false));
     }
 
@@ -704,16 +1042,16 @@ mod tests {
     fn subrepeat_flag_high_iqr_low_p75_does_not_fire() {
         // Wide IQR but the top isn't high enough — p75_min gate blocks.
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.40, 0.25, 0.62, 0.10, Some(false), &cfg);
+        let r = subrepeat_flag(0.40, 0.25, 0.62, 0.10, HIGH_SC, Some(false), &cfg);
         assert_eq!(r, Some(false));
     }
 
     #[test]
     fn subrepeat_flag_phantom_unknown_does_not_block() {
         // phantom = None ⇒ no phantom info, but the row passes the
-        // bimodality + coverage gates: still fire.
+        // bimodality + coverage + spatial gates: still fire.
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.30, None, &cfg);
+        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.30, HIGH_SC, None, &cfg);
         assert_eq!(r, Some(true));
     }
 
@@ -722,7 +1060,7 @@ mod tests {
         // Bimodality gates pass but coverage > cov_max ⇒ real period
         // (coverage_frac too high), not a subrepeat.
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.80, Some(false), &cfg);
+        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.80, HIGH_SC, Some(false), &cfg);
         assert_eq!(r, Some(false));
     }
 
@@ -731,8 +1069,29 @@ mod tests {
         // Bimodality gates pass but coverage < cov_min ⇒ too few hits
         // for a real subrepeat (noise-leaning).
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.05, Some(false), &cfg);
+        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.05, HIGH_SC, Some(false), &cfg);
         assert_eq!(r, Some(false));
+    }
+
+    #[test]
+    fn subrepeat_flag_low_spatial_contrast_does_not_fire() {
+        // TRC_115-style: bimodal + intermediate coverage but the hits
+        // are scattered uniformly across the array (near-founder
+        // harmonic). Default spatial_contrast_min = 0.40 blocks it.
+        let cfg = SubrepeatConfig::default();
+        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.30, Some(0.10), Some(false), &cfg);
+        assert_eq!(r, Some(false));
+    }
+
+    #[test]
+    fn subrepeat_flag_na_spatial_contrast_yields_na() {
+        // When too few bins meet the per-bin minimum (very short
+        // arrays), spatial_contrast is None and the gate cannot fire —
+        // result is None, not Some(false), so downstream consumers
+        // distinguish "no data" from "explicitly rejected".
+        let cfg = SubrepeatConfig::default();
+        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.30, None, Some(false), &cfg);
+        assert_eq!(r, None);
     }
 
     // --- founder gate ------------------------------------------------------
@@ -761,6 +1120,10 @@ mod tests {
             phantom,
             subrepeat,
             coverage_frac: identity_med.map(|_| 0.3),
+            spatial_contrast: identity_med.map(|_| 0.5),
+            founder_period: None,
+            kmer_autocorr_founder: None,
+            kmer_phase_contrast: None,
         }
     }
 
@@ -774,7 +1137,7 @@ mod tests {
             mk_stats(Some(0.94), Some(false), Some(false)),
             mk_stats(Some(0.66), Some(false), Some(true)),
         ];
-        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70);
+        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70, 0.25);
         assert_eq!(n, 1);
         assert_eq!(stats[0].subrepeat, Some(false));
         assert_eq!(stats[1].subrepeat, Some(false)); // overridden
@@ -789,7 +1152,7 @@ mod tests {
             mk_stats(Some(0.86), Some(false), Some(false)),
             mk_stats(Some(0.60), Some(false), Some(true)),
         ];
-        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70);
+        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70, 0.25);
         assert_eq!(n, 0);
         assert_eq!(stats[1].subrepeat, Some(true));
     }
@@ -803,7 +1166,7 @@ mod tests {
             mk_stats(Some(0.55), Some(false), Some(false)),
             mk_stats(Some(0.55), Some(false), Some(true)),
         ];
-        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70);
+        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70, 0.25);
         assert_eq!(n, 0);
         assert_eq!(stats[1].subrepeat, Some(true));
     }
@@ -824,7 +1187,7 @@ mod tests {
             mk_stats(Some(0.90), Some(false), Some(false)),
             mk_stats(Some(0.55), Some(false), Some(true)),
         ];
-        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70);
+        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70, 0.25);
         // 600 ≥ 470 (founder), so override fires.
         assert_eq!(n, 1);
         assert_eq!(stats[2].subrepeat, Some(false));
@@ -844,11 +1207,161 @@ mod tests {
             mk_stats(Some(0.90), Some(false), Some(false)),
             mk_stats(Some(0.55), Some(false), Some(true)),
         ];
-        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70);
+        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70, 0.25);
         // Founder is rank-2 with period 200. Candidate is rank-7 at 500.
         // 500 ≥ 200 ⇒ override.
         assert_eq!(n, 1);
         assert_eq!(stats[2].subrepeat, Some(false));
+    }
+
+    #[test]
+    fn founder_gate_overrides_near_founder_candidate() {
+        // TRC_115:chr7_353599568_353653880-style regression: founder
+        // P=2018 is well-identified at rank 1; rank 6 P=1955 is
+        // bimodal and spatially clustered (slow phase drift), so it
+        // beat the spatial-contrast gate and was flagged
+        // subrepeat=true. period/founder = 1955/2018 = 0.969 > 0.25
+        // so the ratio gate must suppress it.
+        let rows = vec![mk_row("TRC_115", 1, 2018), mk_row("TRC_115", 6, 1955)];
+        let mut stats = vec![
+            mk_stats(Some(0.98), Some(false), Some(false)),
+            mk_stats(Some(0.50), Some(false), Some(true)),
+        ];
+        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70, 0.25);
+        assert_eq!(n, 1);
+        assert_eq!(stats[1].subrepeat, Some(false));
+        assert_eq!(stats[1].founder_period, Some(2018));
+    }
+
+    #[test]
+    fn founder_gate_ratio_boundary_inclusive() {
+        // period = founder · max_ratio exactly ⇒ subrepeat stays true
+        // (only `>` triggers override). Use founder=200, max_ratio=0.25
+        // ⇒ cap=50; period=50 should be kept; period=51 should be
+        // suppressed.
+        let rows = vec![
+            mk_row("CASE_BR", 1, 200),
+            mk_row("CASE_BR", 2, 50),
+            mk_row("CASE_BR", 3, 51),
+        ];
+        let mut stats = vec![
+            mk_stats(Some(0.90), Some(false), Some(false)),
+            mk_stats(Some(0.55), Some(false), Some(true)),
+            mk_stats(Some(0.55), Some(false), Some(true)),
+        ];
+        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70, 0.25);
+        assert_eq!(n, 1);
+        assert_eq!(stats[1].subrepeat, Some(true)); // period == cap → kept
+        assert_eq!(stats[2].subrepeat, Some(false)); // period > cap → suppressed
+    }
+
+    #[test]
+    fn founder_gate_fills_founder_period_on_every_row() {
+        // Even rows that don't have subrepeat=true should have
+        // founder_period populated (diagnostic column).
+        let rows = vec![
+            mk_row("CASE_A", 1, 200),
+            mk_row("CASE_A", 2, 50),
+            mk_row("CASE_A", 3, 800),
+        ];
+        let mut stats = vec![
+            mk_stats(Some(0.92), Some(false), Some(false)),
+            mk_stats(Some(0.65), Some(false), Some(true)),
+            mk_stats(Some(0.40), Some(false), None),
+        ];
+        let _ = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70, 0.25);
+        assert_eq!(stats[0].founder_period, Some(200));
+        assert_eq!(stats[1].founder_period, Some(200));
+        assert_eq!(stats[2].founder_period, Some(200));
+    }
+
+    #[test]
+    fn founder_gate_leaves_founder_period_none_when_no_qualifying_founder() {
+        let rows = vec![mk_row("CASE_B", 1, 500), mk_row("CASE_B", 2, 40)];
+        let mut stats = vec![
+            mk_stats(Some(0.55), Some(false), Some(false)),
+            mk_stats(Some(0.55), Some(false), Some(true)),
+        ];
+        let _ = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70, 0.25);
+        assert!(stats[0].founder_period.is_none());
+        assert!(stats[1].founder_period.is_none());
+    }
+
+    // --- spatial contrast -------------------------------------------------
+
+    /// Build a `Pair` at the given anchor offset. Other coordinates
+    /// are dummy values; the spatial_contrast helper only reads
+    /// `a_start`.
+    fn pair_at(a_start: usize) -> sample::Pair {
+        sample::Pair {
+            a_start,
+            a_end: a_start + 100,
+            b_start: a_start + 100,
+            b_end: a_start + 200,
+        }
+    }
+
+    #[test]
+    fn spatial_contrast_clustered_hits_yield_high_contrast() {
+        // Array of 10_000 bp, period 100, slop 10 ⇒ max_anchor = 9790.
+        // Place 100 pairs uniformly across the array. The first 25 land
+        // in bins 0–1 (anchor ~0–2000) and are all "hits"; the rest are
+        // misses. Expect contrast ≈ 1.0.
+        let mut pairs = Vec::new();
+        let mut ids = Vec::new();
+        let array_len = 10_000usize;
+        let period = 100usize;
+        let slop = 10usize;
+        let max_anchor = array_len - 2 * period - slop;
+        for i in 0..100 {
+            let a = (i * max_anchor) / 99;
+            pairs.push(pair_at(a));
+            ids.push(if i < 25 { 0.95 } else { 0.30 });
+        }
+        let sc = spatial_contrast_from_pairs(&pairs, &ids, array_len, period, slop, 0.70, 10, 5)
+            .expect("contrast should be computable");
+        assert!(sc > 0.8, "expected high contrast, got {sc}");
+    }
+
+    #[test]
+    fn spatial_contrast_uniform_hits_yield_low_contrast() {
+        // Same shape, but hits scattered uniformly (every 4th pair is a
+        // hit). Each bin sees roughly the same hit fraction (~0.25).
+        // Expect contrast near 0.
+        let mut pairs = Vec::new();
+        let mut ids = Vec::new();
+        let array_len = 10_000usize;
+        let period = 100usize;
+        let slop = 10usize;
+        let max_anchor = array_len - 2 * period - slop;
+        for i in 0..100 {
+            let a = (i * max_anchor) / 99;
+            pairs.push(pair_at(a));
+            ids.push(if i % 4 == 0 { 0.95 } else { 0.30 });
+        }
+        let sc = spatial_contrast_from_pairs(&pairs, &ids, array_len, period, slop, 0.70, 10, 5)
+            .expect("contrast should be computable");
+        assert!(sc < 0.30, "expected low contrast, got {sc}");
+    }
+
+    #[test]
+    fn spatial_contrast_returns_none_when_too_few_bins_qualify() {
+        // Only 4 pairs total — fewer than min_pairs_per_bin in every
+        // bin. Result must be None so subrepeat_flag returns NA rather
+        // than a misleading false.
+        let pairs: Vec<sample::Pair> = (0..4).map(|i| pair_at(i * 1000)).collect();
+        let ids = vec![0.95, 0.30, 0.95, 0.30];
+        let sc = spatial_contrast_from_pairs(&pairs, &ids, 10_000, 100, 10, 0.70, 10, 5);
+        assert!(sc.is_none());
+    }
+
+    #[test]
+    fn spatial_contrast_returns_none_when_array_too_short() {
+        // array_len < 2*period + slop ⇒ no valid anchor range.
+        let pairs = vec![pair_at(0)];
+        let ids = vec![0.95];
+        let sc = spatial_contrast_from_pairs(&pairs, &ids, 100, 100, 10, 0.70, 10, 5);
+        assert!(sc.is_none());
     }
 
     #[test]

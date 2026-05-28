@@ -2,10 +2,13 @@
 
 `rescore` adds a nucleotide-level confidence signal to kite's peaks. For
 each candidate period it samples adjacent tile pairs from the array and
-computes their median pairwise identity, alignment shift, and two
-derived flags. The output is kite's peaks TSV with **9 appended
-columns**: `identity_med`, `identity_iqr`, `identity_p25`, `identity_n`,
-`shift_med`, `shift_consistency`, `phantom`, `subrepeat`, `coverage_frac`.
+computes their median pairwise identity, alignment shift, two derived
+flags, and a spatial-coherence statistic for the high-identity hits.
+The output is kite's peaks TSV with **13 appended columns**:
+`identity_med`, `identity_iqr`, `identity_p25`, `identity_n`,
+`shift_med`, `shift_consistency`, `phantom`, `subrepeat`,
+`coverage_frac`, `spatial_contrast`, `founder_period`,
+`kmer_autocorr_founder`, `kmer_phase_contrast`.
 
 The metric is **additive only**. Downstream stages (rule-classify,
 analyze) still decide on kite's `score2_norm`; rescore is a diagnostic
@@ -17,7 +20,7 @@ column that downstream analysis can consult independently.
 
 ## Status
 
-Stable. Six feature drops:
+Stable. Seven feature drops:
 
 1. **Tier 1** — banded DP kernel, `u16` cells, scratch reuse, runtime
    logging, CLI defaults (`--top-n 10`, `--max-period 5000`).
@@ -32,8 +35,31 @@ Stable. Six feature drops:
 6. **Founder gate** — `subrepeat` post-pass overrides
    `period ≥ founder_period` rows to `false`; founder is the
    lowest-rank row with `identity_med ≥ 0.70` and `phantom != true`.
+   The selected founder period is exposed as the `founder_period`
+   column.
+7. **Spatial-contrast gate (Step C)** — new `spatial_contrast`
+   column distinguishes a real localised motif (high-identity pairs
+   clustered in a few array bins) from a near-founder harmonic
+   (high-identity pairs scattered uniformly across the array, even
+   though the marginal identity distribution looks bimodal).
+   `subrepeat` now additionally requires `spatial_contrast ≥
+   --subrepeat-spatial-contrast-min` (default 0.40); when
+   `spatial_contrast` is `NA`, `subrepeat` is `NA` rather than
+   `false`.
+8. **Period/founder ratio gate (Step D)** — augments the founder
+   gate's post-pass. A real subrepeat must tile multiple times
+   inside one founder, so its period must be much shorter than
+   the founder. The gate suppresses `subrepeat = true` whenever
+   `period > founder_period · --subrepeat-period-founder-max-ratio`
+   (default 0.25 — period must be ≤ founder/4, i.e. tile ≥ 4 times).
+   Catches the slow-phase-drift near-founder harmonics that
+   `spatial_contrast` lets through because the drift cycles cluster
+   hits in a few array regions (TRC_115:chr7_353599568 P=1955 inside
+   founder P=2018, ratio 0.97). Applied only when the per-record
+   founder is known; rows in records with no qualifying founder are
+   unaffected.
 
-62 unit tests + 2 integration tests cover the kernel, sampler,
+72 unit tests + 2 integration tests cover the kernel, sampler,
 aggregators, and end-to-end behaviour. The two derived flags are
 **mutually exclusive** by construction (the founder gate / phantom
 priority enforces it).
@@ -95,6 +121,8 @@ kitehor rescore <FASTA>... --peaks <peaks.tsv> -o <prefix>
 | `--subrepeat-cov-min` | `0.10` | minimum `coverage_frac` for the subrepeat flag |
 | `--subrepeat-cov-max` | `0.50` | maximum `coverage_frac` for the subrepeat flag |
 | `--subrepeat-founder-id-min` | `0.70` | min identity_med for a row to qualify as the per-record founder against which subrepeat candidates are gated |
+| `--subrepeat-spatial-contrast-min` | `0.40` | min `spatial_contrast` for the subrepeat flag; below this the candidate's hits are too uniformly scattered (near-founder harmonic) and the flag is suppressed |
+| `--subrepeat-period-founder-max-ratio` | `0.25` | max `period / founder_period` for the subrepeat flag; a real subrepeat tiles ≥ 4 times inside the founder. Rows with `period > founder · max_ratio` have `subrepeat` overridden to `false` (applied only when founder is known) |
 | `--min-array-bp` / `--max-n-fraction` | shared QC | inherits from `QcOpts` |
 | `--threads` | `0` (auto) | rayon worker count |
 
@@ -159,10 +187,10 @@ that slip through.
 
 ## Output schema
 
-`<prefix>.peaks.tsv` is the input file with nine columns appended:
+`<prefix>.peaks.tsv` is the input file with **eleven columns appended**:
 
 ```
-identity_med  identity_iqr  identity_p25  identity_n  shift_med  shift_consistency  phantom  subrepeat  coverage_frac
+identity_med  identity_iqr  identity_p25  identity_n  shift_med  shift_consistency  phantom  subrepeat  coverage_frac  spatial_contrast  founder_period
 ```
 
 - `identity_med`, `identity_iqr`, `identity_p25` — `%.4f` ∈ [0, 1].
@@ -180,8 +208,61 @@ identity_med  identity_iqr  identity_p25  identity_n  shift_med  shift_consisten
   reached `--coverage-threshold`. Independent diagnostic of "how much of
   the array this period actually tiles". Real periods sit near 1.0,
   noise near 0, subrepeats in the middle band.
+- `spatial_contrast` — `%.4f` ∈ [0, 1] / `NA`. Difference between the
+  highest and lowest per-bin hit fractions when sampled pairs are
+  binned by anchor offset into 10 equal bins. **Discriminates a real
+  localised subrepeat (high contrast, hits clustered) from a
+  near-founder harmonic (low contrast, hits scattered uniformly).**
+  `NA` when fewer than 2 bins meet the per-bin minimum (very short
+  arrays). See "Subrepeat flag" below.
+- `founder_period` — int / `NA`. The per-record founder period (bp)
+  used by the founder gate — the lowest-rank row with `identity_med
+  ≥ --subrepeat-founder-id-min` and `phantom != true`. Same value
+  across every row of a record. `NA` when no row in the record met
+  the founder criteria.
+- `kmer_autocorr_founder` — `%.4f` / `NA`. **Observational** — does
+  not gate the `subrepeat` flag. Pearson autocorrelation of the
+  period-`period` k-mer pair density profile at lag =
+  `founder_period`. High (≈ +0.6 to +1.0) when density(x)
+  oscillates with the founder period — strong evidence of a real
+  nested subrepeat. Vulnerable to boundary jitter; on real
+  centromeric arrays ~75 % of currently-flagged subrepeats clear
+  the 0.4 threshold. `NA` when founder unknown, total matching
+  pairs < `min_total_pairs`, or autocorrelation variance is zero.
+  See [the metric guide](#interpreting-kmer_autocorr_founder--kmer_phase_contrast)
+  below.
+- `kmer_phase_contrast` — `%.4f` ∈ [0, 0.5] / `NA`.
+  **Observational** — does not gate the `subrepeat` flag. Bins
+  midpoints by `(mid mod founder_period)` into 12 phase bins,
+  finds the contiguous half (6 bins) holding the most midpoints,
+  returns `(max_half_fraction − 0.5)`. High (≈ 0.30–0.50) when
+  midpoints prefer one half of the founder cycle — TRC_104-style
+  evidence (subrepeat occupies one contiguous portion of each
+  founder copy). Jitter-tolerant on short arrays; smears toward
+  zero on very long arrays. `NA` when founder unknown.
 - All original cells are passed through **verbatim** (no float
   reformatting), so byte-equality is preserved on the unchanged columns.
+
+## Interpreting `kmer_autocorr_founder` + `kmer_phase_contrast`
+
+The two metrics ask the same question — "is the candidate period
+living in a specific phase of the founder cycle?" — but in
+complementary ways, and they fail in opposite regimes. Use them
+together to triage `subrepeat=true` rows.
+
+| pattern | autoF | phaseC | interpretation |
+|---|---|---|---|
+| both elevated (autoF ≥ 0.4 AND phaseC ≥ 0.10) | high | high | strong nested-subrepeat evidence |
+| autoF elevated, phaseC low | high | low | likely real subrepeat in a long array where phase drift smeared phaseC |
+| autoF low, phaseC elevated | low | high | likely real subrepeat in a short array where autoF can't lock the autocorrelation (TRC_104 pattern) |
+| both low | low | low | weak k-mer-positional evidence; the existing gates already drove the decision |
+| both elevated on a non-subrepeat row | high | high | near-founder coincidence pattern; check `period / founder_period` ratio |
+
+On the IPIP 2026-04-14 corpus, 94 % of 53 currently-flagged
+subrepeats with known founder have at least one of `autoF ≥ 0.4`
+OR `phaseC ≥ 0.10` elevated; only 6 % light up neither. The two
+metrics are genuinely complementary — each catches a class the
+other misses.
 
 ## Phantom periods
 
@@ -232,26 +313,73 @@ and score near 1.0, the rest land outside and score near random.
 
 A bimodal distribution produces a wide IQR with a high `identity_p75`,
 a moderate `identity_med`, and a `coverage_frac` between the noise floor
-and the real-period ceiling:
+and the real-period ceiling. But **bimodality alone is not enough** —
+near-founder harmonics (candidate period within a few bp of the real
+founder) also look bimodal because cumulative phase drift causes some
+sampled pairs to land in register and others to land off. The
+discriminator is **spatial coherence**:
+
+| Source of bimodality | `coverage_frac` shape | spatial pattern |
+|---|---|---|
+| Real localised subrepeat | intermediate (10–50 %) | hits cluster in a few array bins → **high `spatial_contrast`** |
+| Near-founder harmonic | intermediate (10–50 %) | hits scattered uniformly across bins → **low `spatial_contrast`** |
+
+So the subrepeat gate is:
 
 ```
-subrepeat = identity_p75   ≥ subrepeat_p75_min       (default 0.70)
-        AND identity_iqr   ≥ subrepeat_iqr_min       (default 0.15)
-        AND identity_med   <  subrepeat_med_max      (default 0.70)
-        AND coverage_frac  ≥  subrepeat_cov_min      (default 0.10)
-        AND coverage_frac  ≤  subrepeat_cov_max      (default 0.50)
-        AND phantom        != true
-        AND period         <  founder_period         (founder gate)
+subrepeat = identity_p75       ≥ subrepeat_p75_min                  (default 0.70)
+        AND identity_iqr       ≥ subrepeat_iqr_min                  (default 0.15)
+        AND identity_med       <  subrepeat_med_max                 (default 0.70)
+        AND coverage_frac      ≥  subrepeat_cov_min                 (default 0.10)
+        AND coverage_frac      ≤  subrepeat_cov_max                 (default 0.50)
+        AND spatial_contrast   ≥  subrepeat_spatial_contrast_min    (default 0.40)
+        AND phantom            != true
+        AND period             ≤  founder_period · max_ratio        (default 0.25)
 ```
+
+The **period / founder_period ratio gate** (last line) is the
+biological "tiles ≥ 4 times inside the founder" constraint. It
+catches near-founder harmonics where the slow phase drift
+accidentally clusters hits in a few array regions and beats the
+spatial-contrast test (e.g. P = 1955 inside founder P = 2018 has
+ratio 0.97 and clusters hits in the array region where the drift
+happens to land in-phase — both bimodality and spatial-contrast
+pass, only the ratio gate rules it out).
+
+`spatial_contrast` is computed by binning the anchor offsets of all
+sampled pairs into `SPATIAL_N_BINS = 10` equal bins, computing each
+bin's hit fraction (pairs with identity ≥ `--coverage-threshold`
+divided by total pairs in the bin), and reporting
+`max_bin_hit_fraction − min_bin_hit_fraction` over bins with
+≥ `SPATIAL_MIN_PAIRS_PER_BIN = 5` samples. When fewer than 2 bins
+meet that minimum (very short arrays, or default `--samples 200`
+with extreme rejection), `spatial_contrast` is `NA` and the
+subrepeat gate cannot fire — `subrepeat` is reported as `NA`, not
+`false`, so downstream code distinguishes "no data" from
+"explicitly rejected".
 
 The **founder gate** is enforced as a post-pass: per record, the
 "founder" is the lowest-rank row with `identity_med ≥
-subrepeat_founder_id_min` (default 0.70) and `phantom != true`. Any
-candidate whose period meets or exceeds the founder's period has
-`subrepeat` overridden to `false`. By definition a subrepeat must be
-shorter than the founder monomer; the gate suppresses the false-
-positives we would otherwise emit on long-period harmonics that happen
-to look bimodal across the array.
+subrepeat_founder_id_min` (default 0.70) and `phantom != true`. The
+selected founder period is exposed in the `founder_period` column
+so the gate is auditable without re-running rescore. Any candidate
+whose `period > founder · --subrepeat-period-founder-max-ratio`
+(default 0.25) has `subrepeat` overridden to `false`. Two distinct
+classes of false positive collapse into one rule with this
+formulation:
+
+1. **Long-period harmonics** (`period ≫ founder`): the bimodality
+   heuristic occasionally fires on multiples of the founder; the
+   ratio gate suppresses them trivially.
+2. **Near-founder harmonics** (`period ≈ founder`): slow phase
+   drift between candidate and founder periods clusters hits in a
+   few array regions, so the bimodality + `spatial_contrast` tests
+   both pass; only the ratio constraint identifies these as
+   non-subrepeats.
+
+When no row meets the founder identity criteria, `founder_period`
+is `NA` and the gate cannot apply — the row's `subrepeat` value
+comes from the upstream bimodality + spatial tests alone.
 
 Real periods (high `identity_med`, narrow IQR, coverage near 1) and
 noise periods (low `identity_p75`, low coverage) both fail at least one
@@ -269,6 +397,23 @@ Each of the two width-related gates (`identity_p75` ≥ 0.70 *and*
   (≈ 20 hits)**.
 - For a smaller footprint (< 5 %), raise `--samples` to keep the
   expected hit count above the noise.
+
+### IPIP 2026-04-14 — flag rates by gate addition
+
+Cumulative effect on the 3024-record / 52,510-peak IPIP corpus
+(21,685 rescored after rank / period filters):
+
+| build | `subrepeat=true` | Δ vs v0.11 | gate added |
+|---|---:|---:|---|
+| v0.11 (pre-Step C) | 909 (4.2 %) | — | bimodal + coverage + founder-strict gate |
+| v0.12 + Step C only | 703 (3.2 %) | −23 % | + `spatial_contrast ≥ 0.40` |
+| v0.12 + Step C + D | **319 (1.5 %)** | **−65 %** | + `period ≤ founder · 0.25` |
+
+Of the 319 surviving in v0.12: 53 have a known founder (all with
+`period / founder ∈ (0, 0.25]` by construction, distributed evenly
+across the band — no threshold cliff), 266 are in records where no
+peak qualified as founder (the ratio gate cannot apply). Phantom
+rate unchanged across all builds (≈ 1.5 %).
 
 ### Example (IPIP 2026-04-14)
 

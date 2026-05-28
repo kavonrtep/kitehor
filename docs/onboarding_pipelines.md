@@ -4,8 +4,10 @@ This document is a single-file primer to two `kitehor` subcommands that
 operate on tandem-repeat array FASTA input:
 
 - **`kitehor rescore`** — augments kite's peaks TSV with nucleotide-level
-  identity statistics, shift diagnostics, and two derived flags (`phantom`,
-  `subrepeat`). Per-peak refinement of kite's k-mer signal.
+  identity statistics, shift diagnostics, two derived flags (`phantom`,
+  `subrepeat`), a spatial-coherence statistic (`spatial_contrast`), and
+  the per-record founder period (`founder_period`). Per-peak refinement
+  of kite's k-mer signal.
 - **`kitehor report`** — runs kite, peak clustering, SSR scan, and
   irregularity scan on a FASTA and emits a single TSV with raw
   measurements per record. Whole-array observation-only mode; no
@@ -33,7 +35,7 @@ while `report` runs kite internally.
 
 | Stage | Maturity | Recently changed | Known caveats |
 |---|---|---|---|
-| `rescore` | **stable** — six features shipped (Tier 1 + phantom + subrepeat Step A & B + auto-band + founder gate). 62 unit tests + 2 integration tests. | period-relative band default (auto-scales to `max(20, 2·slop, ⌈0.02·P⌉)`); founder-gated subrepeat flag | `--max-period 5000` default skips very long candidates; subrepeat detection floor at K=200 is ≈ 10 % array footprint |
+| `rescore` | **stable** — eight features shipped (Tier 1 + phantom + subrepeat Step A & B + auto-band + founder gate + spatial-contrast gate + period/founder ratio gate). 72 unit tests + 2 integration tests. | spatial-contrast gate (`--subrepeat-spatial-contrast-min`, default 0.40) + period/founder ratio gate (`--subrepeat-period-founder-max-ratio`, default 0.25); `founder_period` column exposed | `--max-period 5000` default skips very long candidates; subrepeat detection floor at K=200 is ≈ 10 % array footprint |
 | `report` | **stable** — observation-only; no recent changes to columns or semantics. | none (last touch: `irreg_dropout_rate_per_pair` added in v0.12) | tandem-validate deliberately excluded; depends on rank-1 kite peak for downstream stage input |
 
 Both are deterministic given inputs and CLI flags. Both run records in
@@ -58,7 +60,7 @@ tile pairs to get a nucleotide-level identity per peak, then derives two
 boolean flags (`phantom`, `subrepeat`) from the per-pair distribution and
 alignment-shift statistics.
 
-The output is the input peaks TSV with **9 columns appended**. Nothing
+The output is the input peaks TSV with **13 columns appended**. Nothing
 upstream is mutated. The metric is additive — downstream stages
 (rule-classify, analyze) still drive decisions from kite's `score2_norm`.
 
@@ -71,7 +73,7 @@ upstream is mutated. The metric is additive — downstream stages
 
 ### Output schema (full reference)
 
-`<prefix>.peaks.tsv` is the input file with 9 columns appended:
+`<prefix>.peaks.tsv` is the input file with 13 columns appended:
 
 | # | column | type | meaning |
 |---|---|---|---|
@@ -84,6 +86,10 @@ upstream is mutated. The metric is additive — downstream stages
 | 7 | `phantom` | bool | candidate period is a sub-tile of a longer real period |
 | 8 | `subrepeat` | bool | candidate period is a localized short motif inside the founder monomer |
 | 9 | `coverage_frac` | float | fraction of pairs with identity ≥ `--coverage-threshold`; independent diagnostic |
+| 10 | `spatial_contrast` | float | max − min per-bin hit fraction across 10 anchor-offset bins; high (≈ 1) = localised subrepeat, low (≈ 0) = near-founder harmonic. `NA` when fewer than 2 bins meet the per-bin minimum |
+| 11 | `founder_period` | int (bp) | per-record founder period used by the founder gate (same value across all rows of one record); `NA` when no row met `identity_med ≥ founder_id_min` and `phantom != true` |
+| 12 | `kmer_autocorr_founder` | float | Pearson autocorrelation of the period-P k-mer pair density profile at lag = `founder_period`. Range `[−1, +1]`. High when density(x) oscillates with the founder period (real nested subrepeat). **Observational** — does not gate the `subrepeat` flag. `NA` when founder unknown |
+| 13 | `kmer_phase_contrast` | float | Max-contiguous-half-fraction excess of midpoints folded by `(mid mod founder_period)` into 12 phase bins. Range `[0, 0.5]`. High when midpoints prefer one half of the founder cycle (TRC_104-style). **Observational** — does not gate the `subrepeat` flag. `NA` when founder unknown |
 
 `NA` cells in any of the additive columns indicate either kite-filtered
 rows (rank/period out of range or record missing from FASTA) or
@@ -102,10 +108,14 @@ exclusive — the founder gate enforces it.
   IPIP corpus, where `shift_med = +6` correctly identifies the real
   62 bp period.
 - **`subrepeat = true`** — bimodal identity distribution (some sampled
-  pairs hit hard, others miss) inside the founder monomer; the candidate
-  period is a short motif tiling part of the array. Founder-gated:
-  only candidates with period < founder period qualify. Worked example:
-  TRC_104 P=36 inside founder P=180.
+  pairs hit hard, others miss) **AND** the high-identity hits are
+  spatially clustered (`spatial_contrast ≥ 0.40`) **AND** the period
+  is short enough to tile multiple times inside the founder
+  (`period ≤ founder_period · 0.25` by default — tiles ≥ 4 times).
+  Together these identify a short motif tiling only part of the
+  array, not a near-founder harmonic. The selected founder period
+  is exposed in the `founder_period` column. Worked example:
+  TRC_104 P=36 inside founder P=180 (ratio 0.20).
 
 ### Algorithm (sketch — see `rescore.md` for full detail)
 
