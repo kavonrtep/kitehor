@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use kitehor::cli::{
     AnalyzeArgs, Cli, Command, DetectArgs, DetectBatchArgs, IrregularityArgs, KitePeriodicityArgs,
-    RuleClassifyArgs, SimulateArgs, SimulateGridArgs, SsrScanArgs, SummaryMergeArgs, SynthArgs,
-    SynthBatchArgs, SynthValidateArgs, TandemValidateArgs,
+    ReportArgs, RuleClassifyArgs, SimulateArgs, SimulateGridArgs, SsrScanArgs, SummaryMergeArgs,
+    SynthArgs, SynthBatchArgs, SynthValidateArgs, TandemValidateArgs,
 };
 use kitehor::io::{load_fasta, LoadQc, LoadStatus};
 use kitehor::kite::{analyze as kite_analyze, KiteConfig};
@@ -32,7 +32,29 @@ fn main() -> Result<()> {
         Command::TandemValidate(args) => run_tandem_validate(args),
         Command::Analyze(args) => run_analyze(args),
         Command::Irregularity(args) => run_irregularity(args),
+        Command::Report(args) => run_report(args),
     }
+}
+
+fn run_report(args: ReportArgs) -> Result<()> {
+    if args.threads > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global()
+            .ok();
+    }
+    let cfg = kitehor::report::Config {
+        cluster_tol: args.cluster_tol,
+        irregularity: kitehor::irregularity::Config {
+            step_min_frac_of_p: args.irreg_step_min_frac_of_p,
+            min_copies_for_scan: args.irreg_min_copies_for_scan,
+            ..kitehor::irregularity::Config::default()
+        },
+        ..kitehor::report::Config::default()
+    };
+    let n = kitehor::report::run_subcommand(&args.fasta, &args.out, &cfg)?;
+    info!("report: wrote {n} record(s)");
+    Ok(())
 }
 
 fn run_irregularity(args: IrregularityArgs) -> Result<()> {

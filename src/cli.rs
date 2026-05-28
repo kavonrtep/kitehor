@@ -78,6 +78,12 @@ pub enum Command {
     /// Emits `<prefix>.irregularity.tsv` with 14 columns including
     /// `indel_event_count`, `indel_burden_pct`, and `dropout_rate_per_pair`.
     Irregularity(IrregularityArgs),
+    /// Defensive observation-only report: kite + clustered peaks +
+    /// SSR + irregularity in one tab-separated table with one row per
+    /// FASTA record. Lists within a cell are `;`-separated; fields
+    /// within a list entry are `:`-separated. No `combined_class`, no
+    /// rule_classify verdict — values only.
+    Report(ReportArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -687,6 +693,32 @@ pub struct IrregularityArgs {
     /// Minimum independent phase-bin groups required to run. Default 3.
     #[arg(long, default_value_t = 3)]
     pub min_kmer_groups: usize,
+}
+
+// ---------------------------------------------------------------------------
+// report
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct ReportArgs {
+    /// Input FASTA.
+    pub fasta: PathBuf,
+    /// Output prefix. Writes `<prefix>.report.tsv`.
+    #[arg(short, long, required = true)]
+    pub out: PathBuf,
+    /// Cluster-peaks relative-period tolerance. Default 0.015.
+    #[arg(long, default_value_t = 0.015)]
+    pub cluster_tol: f64,
+    /// Period-relative absolute floor on irregularity event magnitude.
+    #[arg(long, default_value_t = 0.05)]
+    pub irreg_step_min_frac_of_p: f64,
+    /// Minimum array_length / kite-period ratio for the irregularity
+    /// scan. Below this, irregularity flags `too_short`.
+    #[arg(long, default_value_t = 10)]
+    pub irreg_min_copies_for_scan: usize,
+    /// Number of rayon worker threads (0 = auto).
+    #[arg(long, default_value_t = 0)]
+    pub threads: usize,
 }
 
 #[cfg(test)]
