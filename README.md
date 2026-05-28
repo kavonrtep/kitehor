@@ -92,6 +92,9 @@ A 3-record synthetic fixture (87 KB) ships under `test_data/smoke/`:
 
 ## Subcommands
 
+Every subcommand's CLI surface and TSV output schema (with per-column
+descriptions) is documented in its linked reference doc:
+
 | Command | What it does | Detailed docs |
 |---|---|---|
 | `analyze` | End-to-end pipeline; writes all 7 per-stage TSVs | [`docs/rule_proto.md`](docs/rule_proto.md) |
@@ -99,10 +102,13 @@ A 3-record synthetic fixture (87 KB) ships under `test_data/smoke/`:
 | `rule-classify` | HOR / simple_tr / unresolved verdict per record | [`docs/rule_proto.md`](docs/rule_proto.md#rule-classify) |
 | `tandem-validate` | Unified spatial-localization subrepeat detector | [`docs/rule_proto.md`](docs/rule_proto.md#tandem-validate) |
 | `ssr-scan` | TideCluster-style SSR + kite-driven consensus | [`docs/rule_proto.md`](docs/rule_proto.md#ssr-scan) |
-| `summary-merge` | Outer-join + 7-rule combined_class | [`docs/rule_proto.md`](docs/rule_proto.md#summary-merge) |
-| `detect` / `detect-batch` | v2 line-width detector (operates on row embeddings) | [`docs/new/detect_impl_plan.md`](docs/new/detect_impl_plan.md) |
-| `simulate` / `simulate-grid` | Legacy params.tsv-driven simulator | — |
-| `synth*` | v2 YAML-driven simulator (wobble, phase shifts, events) | [`docs/new/simulator_impl_plan.md`](docs/new/simulator_impl_plan.md) |
+| `summary-merge` | Outer-join + 9-rule combined_class | [`docs/rule_proto.md`](docs/rule_proto.md#summary-merge) |
+| `rescore` | Pairwise tile-identity rescoring of kite peaks (per-peak diagnostic; 9 columns appended) | [`docs/rescore.md`](docs/rescore.md) |
+| `report` | Observation-only per-array TSV (kite + clustered peaks + SSR + irregularity; 20 columns) | [`docs/report.md`](docs/report.md) |
+| `irregularity` | Distance-residual + phase-bin indel-event scan (14 columns) | [`docs/irregularity.md`](docs/irregularity.md) |
+| `detect` / `detect-batch` | v2 line-width detector (operates on row embeddings) | [`docs/detect.md`](docs/detect.md) |
+| `simulate` / `simulate-grid` | Legacy params.tsv-driven simulator | [`docs/simulate.md`](docs/simulate.md) |
+| `synth*` | v2 YAML-driven simulator (wobble, phase shifts, events) | [`docs/synth.md`](docs/synth.md) |
 
 Run any subcommand with `--help` for the full flag list.
 

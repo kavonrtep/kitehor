@@ -130,6 +130,108 @@ host with glibc < 2.34 (Ubuntu 20.04, CentOS 8, Debian 11). Reported in
 [`docs/kitehor_upstream_issues.md`](kitehor_upstream_issues.md). The
 v0.9.3 release ships the fix.
 
+## v0.12.0 — three new subcommands + cascade gates + full doc coverage
+
+Non-breaking release. Adds three independent observation subcommands
+(`rescore`, `report`, `irregularity`), tightens the rule-classify and
+summary-merge cascade with two new threshold gates, and ships
+per-column documentation for every TSV the tool emits.
+
+What it ships:
+
+- **feat(rescore)**: new `kitehor rescore` subcommand — banded
+  semi-global edit-distance scoring of sampled adjacent tile pairs
+  per kite peak. Appends **9 columns** to the input peaks TSV:
+  identity stats (`identity_med`, `identity_iqr`, `identity_p25`,
+  `identity_n`), shift diagnostics (`shift_med`,
+  `shift_consistency`), two derived flags (`phantom`, `subrepeat`),
+  and the standalone `coverage_frac`. Phantom catches sub-period
+  harmonics via shifted alignments; subrepeat catches localised
+  short motifs inside the founder via bimodal identity
+  distributions, founder-gated to keep FP rate ≈ 0.4 % on
+  ground_truth_v2. Period-relative auto-band (`max(20, 2·slop,
+  ⌈0.02·P⌉)`) keeps long monomers from saturating. Additive: no
+  downstream stage changes; cascade still decides on `score2_norm`.
+  Calibration: 0 phantom/subrepeat FPs on true HOR-unit periods;
+  HOR-unit `identity_med` beats monomer `identity_med` on 100 % of
+  clean HORs and 97.5 % overall (1300-case ground_truth_v2). 62
+  unit tests + 2 integration tests.
+- **feat(report)**: new `kitehor report` subcommand — observation-
+  only whole-array TSV. 20 columns: kite peaks (raw + clustered),
+  SSR coverage, irregularity metrics (indel events + drift +
+  dropout rate), and array metadata. No `combined_class`, no
+  rule-classify verdicts. Designed as a sibling to `analyze` for
+  consumers who want raw numbers to filter on themselves rather
+  than the cascade's calls.
+- **feat(irregularity)**: new `kitehor irregularity` subcommand —
+  Rust port of the v2 distance-residual + phase-bin indel-event
+  prototype. 14-column TSV split into the Approach-6 indel /
+  dropout signals (`indel_event_count`, `indel_burden_pct`,
+  `indel_max_shift_bp`, `indel_drift_bp_per_kb` versus
+  `dropout_rate_per_pair`). Available as a standalone subcommand
+  and as the irregularity backend powering `report` columns 13–20.
+- **feat(rule_classify) — new gate**: HOR verdicts now require at
+  least `--min-tile-copies` (default 6) complete tile copies in the
+  array. Records with too few copies fall back to `simple_tr` /
+  `unresolved`. Surfaces the constraint that an HOR call needs
+  enough tile copies for the clustering bump to be meaningful.
+- **feat(summary) — density gate**: `tr_with_subrepeat` cascade
+  decision additionally requires `tv_density ≥
+  --subrepeat-density-min` (default 0.4, tuned down from 0.7).
+  Surfaces a new `subrepeat_coverage_pct` column in `summary.tsv`
+  (column 32) so downstream filters can read the underlying
+  density. Detail: [`docs/irregularity_and_subrepeat_v0_12.md`](irregularity_and_subrepeat_v0_12.md) §1.
+- **feat(simulator)**: legacy `simulate` gains discrete indel
+  events and compound subrepeat monomers; useful for stress-
+  testing the new irregularity backend on known event tracks.
+- **docs**: every subcommand now has a reference page with
+  per-column descriptions for every TSV it emits:
+  - [`docs/rule_proto.md`](rule_proto.md) — 7-stage column tables
+    (kite, peaks, verdicts, tandem_validate, ssr, ssr.regions,
+    summary)
+  - [`docs/rescore.md`](rescore.md) + [`docs/report.md`](report.md)
+    (existing; refreshed)
+  - [`docs/irregularity.md`](irregularity.md) (new)
+  - [`docs/detect.md`](detect.md) (new)
+  - [`docs/synth.md`](synth.md) (new)
+  - [`docs/simulate.md`](simulate.md) (new)
+  - [`docs/onboarding_pipelines.md`](onboarding_pipelines.md) —
+    rescore + report orientation map
+  - `README.md` subcommand table updated to link every reference
+- **schema(summary.tsv)**: gains `subrepeat_coverage_pct` (column
+  32). Column count: 32 → 33. Existing column indices unchanged.
+
+Non-breaking notes for operators:
+
+- `combined_class` values are unchanged from v0.11.0.
+- The new subcommands are independent of `analyze` — `analyze`
+  still emits its 7 per-stage TSVs and nothing else. Run
+  `rescore`, `report`, `irregularity` separately when you want the
+  extra signal.
+- Rule-classify's `min_tile_copies` gate may flip a small number
+  of borderline HOR calls to `simple_tr` / `unresolved` on arrays
+  with very few tile copies (below 6 by default). Override via
+  `--min-tile-copies 0` to restore v0.11 behaviour.
+- Summary's `subrepeat_density_min` gate (0.4) may suppress a
+  small number of borderline `tr_with_subrepeat` calls. Override
+  via `--subrepeat-density-min 0` to restore v0.11 behaviour.
+
+Pre-flight passed:
+- 403 unit + integration tests pass, 1 ignored
+  (`tandem_validate_python_parity`, opt-in;
+  `cargo test --release --locked`).
+- `cargo clippy --release --all-targets --locked --no-deps -- -D warnings` clean.
+- `cargo fmt --all --check` clean.
+- Local `kitehor --version` reports `0.12.0`.
+
+To ship:
+
+```bash
+git tag v0.12.0     # already created by the /release skill
+git push origin main
+git push origin v0.12.0
+```
+
 ## v0.11.0 — SSR cascade fix + 2 new classes (breaking)
 
 **Breaking release.** Fixes a `pure_ssr` over-call bug from v0.10

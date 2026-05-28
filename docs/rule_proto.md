@@ -94,7 +94,183 @@ kitehor summary-merge   --verdicts <prefix>.verdicts.tsv \
 | rule-classify | `.verdicts.tsv` | 10 |
 | tandem-validate | `.tandem_validate.tsv` | 16 |
 | ssr-scan | `.ssr.tsv`, `.ssr.regions.tsv` | 17 / 8 |
-| summary-merge | `.summary.tsv` | 32 |
+| summary-merge | `.summary.tsv` | 33 |
+
+Per-column reference for each file is in **[Output schemas](#output-schemas)** below.
+
+## Output schemas
+
+Every cell is tab-separated. `NA` is used for missing / not-applicable
+values in `rule-classify`, `tandem-validate`, `summary-merge`, and
+`ssr-scan`. Empty file (zero-length, just a trailing newline) is emitted
+for `<prefix>.ssr.regions.tsv` when no SSR motif clears the
+`--min-reps` floor — matches `pd.DataFrame([]).to_csv(...)`.
+
+### `<prefix>.kite.tsv` — kite-periodicity summary (9 columns)
+
+One row per FASTA record. `monomer_size_*` / `score_*` carry the top-3
+kite peaks; `NA` whenever fewer than that survived kite's filters.
+
+| # | column | type | meaning |
+|---|---|---|---|
+| 1 | `case_id` | str | FASTA record identifier |
+| 2 | `array_length` | int | sequence length in bp |
+| 3 | `n_peaks_kept` | int | number of peaks kite retained after its own filtering |
+| 4 | `monomer_size` | int / `NA` | rank-1 peak period (bp) |
+| 5 | `score` | float / `NA` | rank-1 peak raw score (kite `%.10f`) |
+| 6 | `monomer_size_2` | int / `NA` | rank-2 peak period |
+| 7 | `score_2` | float / `NA` | rank-2 peak raw score |
+| 8 | `monomer_size_3` | int / `NA` | rank-3 peak period |
+| 9 | `score_3` | float / `NA` | rank-3 peak raw score |
+
+With `--classify` (single-stage shortcut around `rule-classify`),
+columns 10–14 (`verdict`, `founder`, `multiplicity`, `tile`, `share`)
+are appended; semantics match `.verdicts.tsv` below.
+
+### `<prefix>.kite.peaks.tsv` — kite peaks long-format (9 columns)
+
+One row per kept peak per record (multi-row per record). Consumed by
+every downstream stage that needs the period candidates.
+
+| # | column | type | meaning |
+|---|---|---|---|
+| 1 | `case_id` | str | FASTA record identifier |
+| 2 | `array_length` | int | sequence length in bp |
+| 3 | `rank` | int | rank within the record (1 = highest `score2_norm`) |
+| 4 | `period` | int | candidate period (bp) |
+| 5 | `peak_height` | float | raw histogram height at this period |
+| 6 | `score` | float | kite's raw periodogram score (peak vs local background) |
+| 7 | `score2` | float | `score · log2(period)` — kite's log-weighted variant |
+| 8 | `score2_norm` | float | `score2` divided by the per-record sum (sums to 1 across the row's peaks) |
+| 9 | `background` | float | local background estimate at this period |
+
+### `<prefix>.verdicts.tsv` — rule-classify output (10 columns)
+
+One row per record. The classifier walks a first-match-wins decision
+tree (see [Algorithm details § rule-classify](#rule-classify)) and
+emits a verdict with founder + tile + multiplicity if applicable.
+
+| # | column | type | meaning |
+|---|---|---|---|
+| 1 | `case_id` | str | FASTA record identifier |
+| 2 | `verdict` | str | `hor` / `simple_tr` / `unresolved` |
+| 3 | `founder` | int / `NA` | founder (monomer) period in bp; `NA` when `verdict != hor` |
+| 4 | `multiplicity` | int / `NA` | HOR multiplicity `k`; `NA` when `verdict != hor` |
+| 5 | `tile` | int / `NA` | HOR tile period (`k · founder`); `NA` when `verdict != hor` |
+| 6 | `founder_score` | float / `NA` | clustered score at the founder period (`%.6g`) |
+| 7 | `tile_score` | float / `NA` | clustered score at the tile period (`%.6g`) |
+| 8 | `confidence` | float / `NA` | per-call confidence; computation depends on verdict (see [`docs/hor_confidence_score_calculation.md`](hor_confidence_score_calculation.md)) |
+| 9 | `n_clusters` | int | number of period clusters after single-linkage at `--rule-cluster-tol` |
+| 10 | `reason` | str | decision-path tag — e.g. `case_a_k=3`, `case_b_walk_k=2`, `monotonic_multiples`, `lone_significant_cluster`, `min_tile_copies` (gated out), `no_peaks` |
+
+### `<prefix>.tandem_validate.tsv` — tandem-validate output (16 columns)
+
+One row per record. Spatial-localization test on sub-host periods (the
+unified replacement for the prior `subrepeat-scan` + `hor-validate`
+stages). Full algorithm: [`docs/new/tandem_validate_spec.md`](new/tandem_validate_spec.md).
+
+| # | column | type | meaning |
+|---|---|---|---|
+| 1 | `record_id` | str | FASTA record identifier |
+| 2 | `verdict` | str | the input verdict (echoed from `verdicts.tsv` for self-contained downstream consumption) |
+| 3 | `host_period` | int / `NA` | the host period the test ran against — HOR `tile`, `simple_tr` `founder`, or kite rank-1 for `unresolved` |
+| 4 | `multiplicity` | int / `NA` | HOR `k` when applicable; `NA` otherwise |
+| 5 | `window_bp` | int / `NA` | sliding-window width (`max(host/3, 3·max_candidate, min_window_bp)`, capped at `host`) |
+| 6 | `n_candidates` | int | number of sub-host periods tested |
+| 7 | `candidates` | list-str | `period:kind` entries, `;`-separated (`kind` ∈ `Founder` / `Other`) |
+| 8 | `best_candidate_period` | int / `NA` | the candidate that drove the row's decision |
+| 9 | `best_candidate_kind` | str / `NA` | `Founder` or `Other` |
+| 10 | `density` | float / `NA` | fraction of windows where the best candidate was present (`%.6g`) |
+| 11 | `spatial_contrast` | float / `NA` | max − min of presence across 10 array-position bins |
+| 12 | `phase_contrast` | float / `NA` | max − min of presence across 10 `(mid mod host)` bins; `NA` when `window_bp ≥ host · 0.95` |
+| 13 | `n_windows_total` | int | total sliding windows planned |
+| 14 | `n_windows_present` | int | windows where the best candidate was present |
+| 15 | `decision_hint` | str | `localized_subrepeat` / `confirms_host` / `ambiguous` / `no_signal` / `no_candidates` / `skip_k2` |
+| 16 | `reason` | str | free-text diagnostic (path through the decision tree) |
+
+### `<prefix>.ssr.tsv` — ssr-scan summary (17 columns)
+
+One row per record. Mixes the **raw** array-scale SSR scan with an
+optional **consensus** path that validates a kite top-period monomer
+against the same scanner.
+
+| # | column | type | meaning |
+|---|---|---|---|
+| 1 | `record_id` | str | FASTA record identifier |
+| 2 | `length_bp` | int | sequence length in bp |
+| 3 | `ssr_flag` | str | `yes` / `no` — derived from `raw_total_coverage_pct ≥ ssr_has_pct_threshold` (v0.11+) |
+| 4 | `dominant_motif` | str / `NA` | dominant canonical motif (consensus path when present, else raw top) |
+| 5 | `dominant_motif_length` | int / `NA` | bp length of `dominant_motif` |
+| 6 | `dominant_motif_repeats` | int | total repeat units of `dominant_motif` |
+| 7 | `dominant_motif_coverage_pct` | float | coverage of `dominant_motif` (consensus path: dimer self-coverage; raw path: array coverage) — **informational, not used by the cascade** |
+| 8 | `total_ssr_coverage_pct` | float | total SSR coverage on whatever path was chosen (consensus or raw); equals `raw_total_coverage_pct` on the raw path |
+| 9 | `top_motifs` | list-str | top-3 motifs from the chosen path: `motif:pct;motif:pct;motif:pct` |
+| 10 | `ssr_method` | str | which path produced cols 4–9: `raw_fallback` / `consensus_single` / `consensus_multi` |
+| 11 | `consensus_period_bp` | int / `NA` | kite top period that drove the consensus path; `NA` when not applicable |
+| 12 | `consensus_monomer` | str / `NA` | canonical monomer used for consensus dimer validation |
+| 13 | `ssr_raw_dominant_motif` | str / `NA` | raw-scan dominant motif (always array-scale, regardless of consensus path) |
+| 14 | `ssr_raw_dominant_motif_coverage_pct` | float | raw-scan dominant motif's array coverage |
+| 15 | `ssr_raw_total_coverage_pct` | float | **canonical SSR coverage signal** — sum of all raw-scan motifs' array coverage (cap 100 %). Drives every cascade SSR decision in v0.11+ |
+| 16 | `ssr_raw_n_regions` | int | total raw-scan SSR regions in the array |
+| 17 | `ssr_raw_top_motifs` | list-str | top-3 raw-scan motifs: `motif:pct;motif:pct;motif:pct` |
+
+### `<prefix>.ssr.regions.tsv` — ssr-scan per-region (8 columns)
+
+One row per individual SSR region detected by the raw scan (zero rows
+⇒ empty file, no header). Useful for diagnosing localised SSR
+intrusions inside otherwise non-SSR arrays.
+
+| # | column | type | meaning |
+|---|---|---|---|
+| 1 | `record_id` | str | FASTA record identifier |
+| 2 | `ssr_number` | int | 1-based ordinal within the record |
+| 3 | `motif_length` | int | length of the underlying motif in bp |
+| 4 | `motif_sequence` | str | the raw motif as found (lowercase, in-place orientation) |
+| 5 | `repeats` | int | number of consecutive tandem copies of the motif |
+| 6 | `start` | int | 1-based inclusive start position (matches the prototype's `re.finditer().start() + 1`) |
+| 7 | `end` | int | 0-based exclusive end position (i.e. `start + repeats · motif_length − 1` is the last-base 1-based coordinate; `end` here matches the prototype's `re.finditer().end()` semantics) |
+| 8 | `normalized_motif` | str | lex-min over all rotations of `motif.upper()` and its reverse complement |
+
+### `<prefix>.summary.tsv` — summary-merge output (33 columns)
+
+One row per record. Outer-joins the four upstream stages and adds the
+`combined_class` decision. Floats use `%.4g`.
+
+| # | column | type | meaning |
+|---|---|---|---|
+| 1 | `record_id` | str | FASTA record identifier |
+| 2 | `hor_verdict` | str | `verdicts.tsv::verdict` (`hor` / `simple_tr` / `unresolved`); `unresolved` when join missing |
+| 3 | `hor_founder` | int / `NA` | `verdicts.tsv::founder` |
+| 4 | `hor_multiplicity` | int / `NA` | `verdicts.tsv::multiplicity` |
+| 5 | `hor_tile` | int / `NA` | `verdicts.tsv::tile` |
+| 6 | `hor_confidence` | float / `NA` | `verdicts.tsv::confidence` |
+| 7 | `tv_decision` | str / `NA` | `tandem_validate.tsv::decision_hint` |
+| 8 | `tv_host_period` | int / `NA` | `tandem_validate.tsv::host_period` |
+| 9 | `tv_best_candidate_period` | int / `NA` | `tandem_validate.tsv::best_candidate_period` |
+| 10 | `tv_best_candidate_kind` | str / `NA` | `tandem_validate.tsv::best_candidate_kind` |
+| 11 | `tv_density` | float / `NA` | `tandem_validate.tsv::density`; also gated by `--subrepeat-density-min` before firing `tr_with_subrepeat` (v0.12+ density gate) |
+| 12 | `tv_spatial_contrast` | float / `NA` | `tandem_validate.tsv::spatial_contrast` |
+| 13 | `tv_phase_contrast` | float / `NA` | `tandem_validate.tsv::phase_contrast` |
+| 14 | `tv_n_windows_total` | int / `NA` | `tandem_validate.tsv::n_windows_total` |
+| 15 | `tv_n_windows_present` | int / `NA` | `tandem_validate.tsv::n_windows_present` |
+| 16 | `tv_reason` | str / `NA` | `tandem_validate.tsv::reason` |
+| 17 | `ssr_flag` | str | recomputed from `ssr_raw_total_coverage_pct` (v0.11+): `yes` if ≥ `--ssr-has-pct-threshold`, else `no` |
+| 18 | `ssr_dominant_motif` | str / `NA` | `ssr.tsv::dominant_motif` (informational; not used by cascade) |
+| 19 | `ssr_dominant_motif_length` | int / `NA` | `ssr.tsv::dominant_motif_length` |
+| 20 | `ssr_dominant_motif_repeats` | int / `NA` | `ssr.tsv::dominant_motif_repeats` |
+| 21 | `ssr_dominant_motif_coverage_pct` | float / `NA` | `ssr.tsv::dominant_motif_coverage_pct` (informational; the cascade does NOT read this) |
+| 22 | `ssr_total_coverage_pct` | float / `NA` | `ssr.tsv::total_ssr_coverage_pct` (the chosen-path total) |
+| 23 | `ssr_top_motifs` | list-str / `NA` | `ssr.tsv::top_motifs` |
+| 24 | `ssr_method` | str / `NA` | `ssr.tsv::ssr_method` |
+| 25 | `consensus_period_bp` | int / `NA` | `ssr.tsv::consensus_period_bp` |
+| 26 | `consensus_monomer` | str / `NA` | `ssr.tsv::consensus_monomer` |
+| 27 | `ssr_raw_dominant_motif` | str / `NA` | `ssr.tsv::ssr_raw_dominant_motif` |
+| 28 | `ssr_raw_dominant_motif_coverage_pct` | float / `NA` | `ssr.tsv::ssr_raw_dominant_motif_coverage_pct` |
+| 29 | `ssr_raw_total_coverage_pct` | float / `NA` | **canonical SSR coverage** — the field the cascade reads for `pure_ssr` / `*_with_ssr` decisions |
+| 30 | `ssr_raw_n_regions` | int / `NA` | `ssr.tsv::ssr_raw_n_regions` |
+| 31 | `ssr_raw_top_motifs` | list-str / `NA` | `ssr.tsv::ssr_raw_top_motifs` |
+| 32 | `subrepeat_coverage_pct` | float / `NA` | v0.12 addition — array-scale coverage of the localized subrepeat motif (derived from `tv_density`); informational diagnostic alongside the `tr_with_subrepeat` class. See [`docs/irregularity_and_subrepeat_v0_12.md`](irregularity_and_subrepeat_v0_12.md) §1 |
+| 33 | `combined_class` | str | one of the 9 values listed at the top of this document |
 
 ## Optional periodogram bundle (`--periodogram`)
 
