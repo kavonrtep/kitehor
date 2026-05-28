@@ -3,9 +3,9 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use kitehor::cli::{
-    AnalyzeArgs, Cli, Command, DetectArgs, DetectBatchArgs, KitePeriodicityArgs, RuleClassifyArgs,
-    SimulateArgs, SimulateGridArgs, SsrScanArgs, SummaryMergeArgs, SynthArgs, SynthBatchArgs,
-    SynthValidateArgs, TandemValidateArgs,
+    AnalyzeArgs, Cli, Command, DetectArgs, DetectBatchArgs, IrregularityArgs, KitePeriodicityArgs,
+    RuleClassifyArgs, SimulateArgs, SimulateGridArgs, SsrScanArgs, SummaryMergeArgs, SynthArgs,
+    SynthBatchArgs, SynthValidateArgs, TandemValidateArgs,
 };
 use kitehor::io::{load_fasta, LoadQc, LoadStatus};
 use kitehor::kite::{analyze as kite_analyze, KiteConfig};
@@ -31,7 +31,21 @@ fn main() -> Result<()> {
         Command::SsrScan(args) => run_ssr_scan(args),
         Command::TandemValidate(args) => run_tandem_validate(args),
         Command::Analyze(args) => run_analyze(args),
+        Command::Irregularity(args) => run_irregularity(args),
     }
+}
+
+fn run_irregularity(args: IrregularityArgs) -> Result<()> {
+    let cfg = kitehor::irregularity::Config {
+        k: args.k,
+        top_kmers: args.top_kmers,
+        min_copies_for_scan: args.min_copies_for_scan,
+        step_min_frac_of_p: args.step_min_frac_of_p,
+        min_kmer_groups: args.min_kmer_groups,
+    };
+    let n = kitehor::irregularity::run_subcommand(&args.fasta, &args.kite, &args.out, &cfg)?;
+    info!("irregularity: scanned {n} record(s)");
+    Ok(())
 }
 
 fn run_analyze(args: AnalyzeArgs) -> Result<()> {
@@ -50,6 +64,9 @@ fn run_analyze(args: AnalyzeArgs) -> Result<()> {
     cfg.summary.ssr_has_pct_threshold = args.ssr_has_pct_threshold;
     cfg.summary.subrepeat_density_min = args.subrepeat_density_min;
     cfg.ssr.ssr_flag_threshold_pct = args.ssr_flag_threshold_pct;
+    cfg.irregularity_enabled = args.irregularity;
+    cfg.irregularity.step_min_frac_of_p = args.irregularity_step_min_frac_of_p;
+    cfg.irregularity.min_copies_for_scan = args.irregularity_min_copies_for_scan;
     let report =
         kitehor::analyze::run_with(&args.fasta, &args.out, &cfg, args.periodogram.as_deref())?;
     info!(

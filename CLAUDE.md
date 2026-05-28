@@ -122,6 +122,11 @@ docs/                 project docs
   rule_proto.md       ← the rule-proto pipeline (current default)
   rule.md             archived — the older 4-condition rule (P1 retirement)
   release.md          ← tag → release pipeline runbook
+  irregularity_and_subrepeat_v0_12.md
+                      ← v0.12 subrepeat density gate (Rust, shipped) +
+                        irregularity prototype (Python, tools/rule_proto/
+                        irregularity.py — register-locked k-mer phase
+                        shift detection; not yet ported)
   new/                ← v2 simulator + detector design docs
     taxonomy.md         structural taxonomy of tandem-repeat arrays
     detect_spec.md      line-width detector design (future work)

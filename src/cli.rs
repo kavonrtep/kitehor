@@ -73,6 +73,11 @@ pub enum Command {
     /// (tandem-validate ‖ ssr-scan) → summary-merge on one FASTA.
     /// Always emits every per-stage TSV under `<prefix>.*.tsv`.
     Analyze(AnalyzeArgs),
+    /// Indel-irregularity scan (distance-residual + phase-bin
+    /// clustering; port of `tools/rule_proto/irregularity_v2.py`).
+    /// Emits `<prefix>.irregularity.tsv` with 14 columns including
+    /// `indel_event_count`, `indel_burden_pct`, and `dropout_rate_per_pair`.
+    Irregularity(IrregularityArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -471,6 +476,20 @@ pub struct AnalyzeArgs {
     #[arg(long, default_value_t = 0.4)]
     pub subrepeat_density_min: f64,
 
+    /// Enable the irregularity scan as a 6th parallel branch (writes
+    /// `<prefix>.irregularity.tsv`). Off by default while the cascade
+    /// integration remains separate work — the column is *not* yet
+    /// consumed by `combined_class`.
+    #[arg(long)]
+    pub irregularity: bool,
+    /// Period-relative absolute floor on irregularity event magnitude
+    /// (5% of P by default).
+    #[arg(long, default_value_t = 0.05)]
+    pub irregularity_step_min_frac_of_p: f64,
+    /// Minimum array_length / kite-period ratio for irregularity scan.
+    #[arg(long, default_value_t = 10)]
+    pub irregularity_min_copies_for_scan: usize,
+
     /// Optional: write a FASTA-like periodogram bundle alongside the
     /// per-stage TSVs (same format as `kitehor kite-periodicity
     /// --periodogram`). Off by default.
@@ -636,6 +655,38 @@ pub struct SynthBatchArgs {
     /// Number of rayon worker threads (0 = auto).
     #[arg(long, default_value_t = 0)]
     pub threads: usize,
+}
+
+// ---------------------------------------------------------------------------
+// irregularity
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct IrregularityArgs {
+    /// Input FASTA.
+    pub fasta: PathBuf,
+    /// Kite per-record summary TSV (provides `monomer_size` = top P).
+    #[arg(long, required = true)]
+    pub kite: PathBuf,
+    /// Output prefix. Writes `<prefix>.irregularity.tsv`.
+    #[arg(short, long, required = true)]
+    pub out: PathBuf,
+    /// K-mer length (must match kite; default 6).
+    #[arg(long, default_value_t = 6)]
+    pub k: usize,
+    /// Top-N most frequent k-mers per record (default 100).
+    #[arg(long, default_value_t = 100)]
+    pub top_kmers: usize,
+    /// Minimum array_length / period ratio. Below this → `too_short`.
+    #[arg(long, default_value_t = 10)]
+    pub min_copies_for_scan: usize,
+    /// Period-relative absolute floor on step magnitude (event must be
+    /// at least this fraction of P). Default 0.05.
+    #[arg(long, default_value_t = 0.05)]
+    pub step_min_frac_of_p: f64,
+    /// Minimum independent phase-bin groups required to run. Default 3.
+    #[arg(long, default_value_t = 3)]
+    pub min_kmer_groups: usize,
 }
 
 #[cfg(test)]

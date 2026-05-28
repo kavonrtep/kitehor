@@ -14,6 +14,8 @@
 //!   (port of `tools/rule_proto/ssr_scan.py`).
 //! - [`summary`] — 7-rule combined-class merger (port of
 //!   `tools/rule_proto/summary_unified.py`).
+//! - [`irregularity`] — indel-event scan (distance-residual + phase-bin
+//!   clustering; port of `tools/rule_proto/irregularity_v2.py`).
 //! - [`analyze`] — end-to-end orchestrator running all five stages.
 //! - [`monomer_model`] — block-mean homology probe (`probe_period`).
 //! - [`simulate`] / [`simulate_grid`] / [`synth`] — synthetic
@@ -24,6 +26,7 @@ pub mod errors;
 pub mod io;
 pub mod sequence;
 
+pub mod irregularity;
 pub mod kite;
 pub mod monomer_model;
 pub mod periodogram;

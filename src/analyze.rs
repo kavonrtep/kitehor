@@ -26,6 +26,11 @@ pub struct Config {
     pub tandem_validate: crate::tandem_validate::Config,
     pub ssr: crate::ssr::Config,
     pub summary: crate::summary::Config,
+    pub irregularity: crate::irregularity::Config,
+    /// When `true`, also run the irregularity scan as a 6th parallel
+    /// branch and write `<prefix>.irregularity.tsv`. Off by default —
+    /// the column is not yet consumed by `combined_class`.
+    pub irregularity_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +177,28 @@ pub fn run_with(
     );
     tv_res?;
     ssr_res?;
+
+    // 4c. Irregularity scan (independent of rule_classify/tandem_validate/
+    // ssr_scan; only needs (record_id, sequence, kite top period)).
+    // Off by default — opt in with `--irregularity` (v0.13+).
+    if cfg.irregularity_enabled {
+        let irr_results: Vec<crate::irregularity::RecordResult> = records
+            .par_iter()
+            .map(|(rid, seq)| {
+                let p = top_periods.get(rid).map(|&v| v as f64);
+                crate::irregularity::analyse_record(rid, seq, p, &cfg.irregularity)
+            })
+            .collect();
+        crate::irregularity::io::write_irregularity(
+            &crate::irregularity::io::irregularity_path(out_prefix),
+            &irr_results,
+        )?;
+        log::info!(
+            "irregularity: scanned {} record(s) → {:?}",
+            irr_results.len(),
+            crate::irregularity::io::irregularity_path(out_prefix),
+        );
+    }
 
     // 5. Summary-merge — runs against the freshly-written TSVs so the
     // merge logic is exercised through the same code path as the
