@@ -60,6 +60,34 @@ impl Default for PhantomConfig {
     }
 }
 
+/// Subrepeat heuristic thresholds. Flags candidate periods whose identity
+/// distribution is bimodal — high in part of the array (where the short
+/// motif tandemly repeats inside the founder monomer) and near-random
+/// elsewhere — without being phantoms or real periods.
+#[derive(Debug, Clone, Copy)]
+pub struct SubrepeatConfig {
+    /// Subrepeat fires only when `identity_p75 ≥ p75_min`. Captures
+    /// "some pairs hit hard".
+    pub p75_min: f64,
+    /// Subrepeat fires only when `identity_iqr ≥ iqr_min`. Captures
+    /// "bimodal spread".
+    pub iqr_min: f64,
+    /// Subrepeat fires only when `identity_med < med_max`. Distinguishes
+    /// the bimodal case from a real period that happens to have a wide
+    /// IQR.
+    pub med_max: f64,
+}
+
+impl Default for SubrepeatConfig {
+    fn default() -> Self {
+        Self {
+            p75_min: 0.70,
+            iqr_min: 0.15,
+            med_max: 0.70,
+        }
+    }
+}
+
 /// Rescore stage configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
@@ -80,6 +108,7 @@ pub struct Config {
     /// edit distance (mismatch=1, gap=1). Match cost is always 0.
     pub scoring: aligner::ScoringConfig,
     pub phantom: PhantomConfig,
+    pub subrepeat: SubrepeatConfig,
     pub load_qc: LoadQc,
     pub force: bool,
 }
@@ -98,6 +127,7 @@ impl Default for Config {
             top_n: 10,
             scoring: aligner::ScoringConfig::default(),
             phantom: PhantomConfig::default(),
+            subrepeat: SubrepeatConfig::default(),
             load_qc: LoadQc::default(),
             force: false,
         }
@@ -145,6 +175,11 @@ pub struct RowStats {
     /// Derived phantom flag — `true` when the candidate period is likely
     /// a sub-tile of a longer real period (see `PhantomConfig`).
     pub phantom: Option<bool>,
+    /// Derived subrepeat flag — `true` when the candidate period
+    /// appears to be a short tandem motif localized in part of the
+    /// array (typically within the founder monomer). Always `false`
+    /// when `phantom == Some(true)`.
+    pub subrepeat: Option<bool>,
 }
 
 impl RowStats {
@@ -157,6 +192,7 @@ impl RowStats {
             shift_med: None,
             shift_consistency: None,
             phantom: None,
+            subrepeat: None,
         }
     }
 
@@ -168,7 +204,7 @@ impl RowStats {
         let fi = |o: Option<i32>| o.map(|v| v.to_string()).unwrap_or_else(|| "NA".into());
         let fb = |o: Option<bool>| o.map(|v| v.to_string()).unwrap_or_else(|| "NA".into());
         format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             f(self.identity_med),
             f(self.identity_iqr),
             f(self.identity_p25),
@@ -176,6 +212,7 @@ impl RowStats {
             fi(self.shift_med),
             f(self.shift_consistency),
             fb(self.phantom),
+            fb(self.subrepeat),
         )
     }
 }
@@ -273,6 +310,10 @@ pub fn run_subcommand(
         cfg.phantom.tol_frac,
         cfg.phantom.consistency_min,
     );
+    info!(
+        "rescore: subrepeat_flag p75_min={} iqr_min={} med_max={}",
+        cfg.subrepeat.p75_min, cfg.subrepeat.iqr_min, cfg.subrepeat.med_max,
+    );
 
     let start = Instant::now();
     let processed = AtomicUsize::new(0);
@@ -295,6 +336,7 @@ pub fn run_subcommand(
                         band,
                         &cfg.scoring,
                         &cfg.phantom,
+                        &cfg.subrepeat,
                         scratch,
                     );
                     (r, true)
@@ -360,7 +402,7 @@ pub fn run_subcommand(
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "{}\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n\tshift_med\tshift_consistency\tphantom",
+        "{}\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n\tshift_med\tshift_consistency\tphantom\tsubrepeat",
         loaded.header
     )?;
     for (row, s) in loaded.rows.iter().zip(stats.iter()) {
@@ -382,6 +424,7 @@ pub fn rescore_one(
     band: usize,
     scoring: &aligner::ScoringConfig,
     phantom_cfg: &PhantomConfig,
+    subrepeat_cfg: &SubrepeatConfig,
     scratch: &mut aligner::Scratch,
 ) -> RowStats {
     let pairs = sample::sample_pairs(seq, period, case_id, cfg);
@@ -417,15 +460,34 @@ pub fn rescore_one(
     // Shift aggregate over high-identity pairs only.
     let (shift_med, shift_consistency, phantom) = aggregate_shifts(&per_pair, period, phantom_cfg);
 
+    let iqr = (p75 - p25).max(0.0);
+    let subrepeat = subrepeat_flag(med, iqr, p75, phantom, subrepeat_cfg);
+
     RowStats {
         identity_med: Some(med),
-        identity_iqr: Some((p75 - p25).max(0.0)),
+        identity_iqr: Some(iqr),
         identity_p25: Some(p25),
         identity_n: ids.len(),
         shift_med,
         shift_consistency,
         phantom,
+        subrepeat,
     }
+}
+
+/// Subrepeat heuristic: bimodal identity distribution + not phantom +
+/// not a real period.
+fn subrepeat_flag(
+    med: f64,
+    iqr: f64,
+    p75: f64,
+    phantom: Option<bool>,
+    cfg: &SubrepeatConfig,
+) -> Option<bool> {
+    if matches!(phantom, Some(true)) {
+        return Some(false);
+    }
+    Some(p75 >= cfg.p75_min && iqr >= cfg.iqr_min && med < cfg.med_max)
 }
 
 /// Aggregate per-pair shifts into (shift_med, shift_consistency, phantom).
@@ -483,7 +545,58 @@ mod tests {
     #[test]
     fn na_row_formats_as_na() {
         let s = RowStats::na();
-        assert_eq!(s.format_row(), "NA\tNA\tNA\t0\tNA\tNA\tNA");
+        assert_eq!(s.format_row(), "NA\tNA\tNA\t0\tNA\tNA\tNA\tNA");
+    }
+
+    // --- subrepeat heuristic -----------------------------------------------
+
+    #[test]
+    fn subrepeat_flag_classic_bimodal_fires() {
+        // Wide IQR + moderate median + high p75, not phantom.
+        let cfg = SubrepeatConfig::default();
+        let r = subrepeat_flag(0.55, 0.40, 0.95, Some(false), &cfg);
+        assert_eq!(r, Some(true));
+    }
+
+    #[test]
+    fn subrepeat_flag_phantom_blocks_subrepeat() {
+        // Same bimodal stats but the row is already a phantom: never flag.
+        let cfg = SubrepeatConfig::default();
+        let r = subrepeat_flag(0.55, 0.40, 0.95, Some(true), &cfg);
+        assert_eq!(r, Some(false));
+    }
+
+    #[test]
+    fn subrepeat_flag_real_period_does_not_fire() {
+        // High median ⇒ real period; med_max gate blocks subrepeat.
+        let cfg = SubrepeatConfig::default();
+        let r = subrepeat_flag(0.95, 0.05, 0.97, Some(false), &cfg);
+        assert_eq!(r, Some(false));
+    }
+
+    #[test]
+    fn subrepeat_flag_noise_does_not_fire() {
+        // Uniformly low identity, narrow IQR ⇒ noise; p75/iqr gates block.
+        let cfg = SubrepeatConfig::default();
+        let r = subrepeat_flag(0.42, 0.07, 0.46, Some(false), &cfg);
+        assert_eq!(r, Some(false));
+    }
+
+    #[test]
+    fn subrepeat_flag_high_iqr_low_p75_does_not_fire() {
+        // Wide IQR but the top isn't high enough — p75_min gate blocks.
+        let cfg = SubrepeatConfig::default();
+        let r = subrepeat_flag(0.40, 0.25, 0.62, Some(false), &cfg);
+        assert_eq!(r, Some(false));
+    }
+
+    #[test]
+    fn subrepeat_flag_phantom_unknown_does_not_block() {
+        // phantom = None ⇒ no phantom info, but the row passes the
+        // bimodality gates: still fire.
+        let cfg = SubrepeatConfig::default();
+        let r = subrepeat_flag(0.55, 0.40, 0.95, None, &cfg);
+        assert_eq!(r, Some(true));
     }
 
     #[test]
@@ -498,6 +611,7 @@ mod tests {
             20,
             &aligner::ScoringConfig::default(),
             &PhantomConfig::default(),
+            &SubrepeatConfig::default(),
             &mut scratch,
         );
         assert!(s.identity_med.is_none());
@@ -527,6 +641,7 @@ mod tests {
             20,
             &aligner::ScoringConfig::default(),
             &PhantomConfig::default(),
+            &SubrepeatConfig::default(),
             &mut scratch,
         );
         // Perfect tandem ⇒ identity = 1.0 across all pairs.

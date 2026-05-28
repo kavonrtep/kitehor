@@ -67,6 +67,11 @@ fn run_rescore(args: RescoreArgs) -> Result<()> {
             tol_frac: args.shift_tol_frac,
             consistency_min: args.shift_consistency_min,
         },
+        subrepeat: kitehor::rescore::SubrepeatConfig {
+            p75_min: args.subrepeat_p75_min,
+            iqr_min: args.subrepeat_iqr_min,
+            med_max: args.subrepeat_med_max,
+        },
         load_qc: LoadQc {
             min_array_bp: args.qc.min_array_bp,
             max_n_fraction: args.qc.max_n_fraction,

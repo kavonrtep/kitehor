@@ -60,6 +60,9 @@ kitehor rescore <FASTA>... --peaks <peaks.tsv> -o <prefix>
 | `--shift-min-pairs` | `5` | minimum high-identity pairs for `shift_med` to be non-NA |
 | `--shift-tol-frac` | `0.05` | `\|shift_med\| / period` threshold for the phantom flag |
 | `--shift-consistency-min` | `0.5` | min fraction of high-identity pairs within ±1 bp of `shift_med` |
+| `--subrepeat-p75-min` | `0.70` | minimum identity_p75 for the subrepeat flag |
+| `--subrepeat-iqr-min` | `0.15` | minimum identity_iqr (bimodal-spread gate) |
+| `--subrepeat-med-max` | `0.70` | maximum identity_med (separates from real periods) |
 | `--min-array-bp` / `--max-n-fraction` | shared QC | inherits from `QcOpts` |
 | `--threads` | `0` (auto) | rayon worker count |
 
@@ -124,10 +127,10 @@ that slip through.
 
 ## Output schema
 
-`<prefix>.peaks.tsv` is the input file with seven columns appended:
+`<prefix>.peaks.tsv` is the input file with eight columns appended:
 
 ```
-identity_med  identity_iqr  identity_p25  identity_n  shift_med  shift_consistency  phantom
+identity_med  identity_iqr  identity_p25  identity_n  shift_med  shift_consistency  phantom  subrepeat
 ```
 
 - `identity_med`, `identity_iqr`, `identity_p25` — `%.4f` ∈ [0, 1].
@@ -139,6 +142,8 @@ identity_med  identity_iqr  identity_p25  identity_n  shift_med  shift_consisten
 - `shift_consistency` — fraction of high-identity pairs with shift
   within ±1 bp of `shift_med`. `NA` whenever `shift_med` is `NA`.
 - `phantom` — `true` / `false` / `NA`. See "Phantom periods" below.
+- `subrepeat` — `true` / `false` / `NA`. See "Subrepeat flag" below. Always
+  `false` (never `true`) on rows where `phantom = true`.
 - All original cells are passed through **verbatim** (no float
   reformatting), so byte-equality is preserved on the unchanged columns.
 
@@ -176,6 +181,51 @@ Calibration on the 1600-case `ground_truth_v2` corpus with defaults:
 | Total flagged | 97 / 11387 (0.85 %) |
 
 Zero false positives on the headline target (HOR-unit periods).
+
+## Subrepeat flag
+
+A "subrepeat" peak is a candidate period that is a short tandem motif
+localized inside the founder monomer rather than tiling the whole array.
+On a dotplot it looks like small squares clustered within the founder
+diagonal. Kite captures these as low-strength peaks because the motif
+*is* locally tandem; rescore catches them because the per-pair identity
+distribution is **bimodal** — some anchors land in the subrepeat region
+and score near 1.0, the rest land outside and score near random.
+
+### Mechanism
+
+A bimodal distribution produces a wide IQR with a high `identity_p75`
+and a moderate `identity_med`. The flag combines those gates:
+
+```
+subrepeat = identity_p75 ≥ subrepeat_p75_min        (default 0.70)
+        AND identity_iqr  ≥ subrepeat_iqr_min        (default 0.15)
+        AND identity_med  < subrepeat_med_max        (default 0.70)
+        AND phantom      != true
+```
+
+Real periods (high `identity_med`, narrow IQR) and noise periods (low
+`identity_p75`, narrow IQR) both fail at least one gate. Phantom-flagged
+rows are excluded so the two boolean columns are mutually exclusive on
+true cases.
+
+### Detection floor
+
+At default `--samples 200` and `--subrepeat-p75-min 0.70`, the
+`identity_p75` gate requires the top 25 % of sampled pairs to score
+above the threshold. That puts the practical detection floor at a
+**subrepeat footprint of ≈ 25 %** of the array. Smaller footprints
+(< 25 %) are missed by this heuristic; for those, raise `--samples` or
+wait for the upcoming `coverage_frac` column.
+
+### Example (IPIP 2026-04-14)
+
+```
+case_id                              rank  period  id_med  id_p75  id_iqr  phantom  subrepeat
+TRC_318_chr6_541268834_541295618      1     34     0.97    0.97    0.35    false    false   (real period — id_med passes med_max gate)
+TRC_104_chr3_411443670_411481970      2     36     0.60    0.72    0.17    false    true    (bimodal + moderate median ⇒ subrepeat)
+TRC_170_chr7_137243949_137267671      6     20     0.60    0.75    0.20    false    true
+```
 
 ## Performance
 

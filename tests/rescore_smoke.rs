@@ -116,7 +116,7 @@ fn rescore_pipeline_appends_columns_and_separates_hor_from_monomer() {
     let header = content.lines().next().unwrap();
     assert!(
         header.ends_with(
-            "\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n\tshift_med\tshift_consistency\tphantom"
+            "\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n\tshift_med\tshift_consistency\tphantom\tsubrepeat"
         ),
         "unexpected header: {}",
         header

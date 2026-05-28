@@ -824,6 +824,21 @@ pub struct RescoreArgs {
     #[arg(long, default_value_t = 0.5)]
     pub shift_consistency_min: f64,
 
+    /// Subrepeat flag minimum p75 identity — captures "some pairs hit
+    /// hard" (the high mode of a bimodal distribution).
+    #[arg(long, default_value_t = 0.70)]
+    pub subrepeat_p75_min: f64,
+
+    /// Subrepeat flag minimum IQR — captures the bimodal spread that
+    /// distinguishes a subrepeat from a real period or pure noise.
+    #[arg(long, default_value_t = 0.15)]
+    pub subrepeat_iqr_min: f64,
+
+    /// Subrepeat flag maximum identity_med — rows above this are real
+    /// periods, not subrepeats.
+    #[arg(long, default_value_t = 0.70)]
+    pub subrepeat_med_max: f64,
+
     #[command(flatten)]
     pub qc: QcOpts,
 
