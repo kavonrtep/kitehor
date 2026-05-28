@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use kitehor::cli::{
     AnalyzeArgs, Cli, Command, DetectArgs, DetectBatchArgs, IrregularityArgs, KitePeriodicityArgs,
-    ReportArgs, RuleClassifyArgs, SimulateArgs, SimulateGridArgs, SsrScanArgs, SummaryMergeArgs,
-    SynthArgs, SynthBatchArgs, SynthValidateArgs, TandemValidateArgs,
+    ReportArgs, RescoreArgs, RuleClassifyArgs, SimulateArgs, SimulateGridArgs, SsrScanArgs,
+    SummaryMergeArgs, SynthArgs, SynthBatchArgs, SynthValidateArgs, TandemValidateArgs,
 };
 use kitehor::io::{load_fasta, LoadQc, LoadStatus};
 use kitehor::kite::{analyze as kite_analyze, KiteConfig};
@@ -33,7 +33,46 @@ fn main() -> Result<()> {
         Command::Analyze(args) => run_analyze(args),
         Command::Irregularity(args) => run_irregularity(args),
         Command::Report(args) => run_report(args),
+        Command::Rescore(args) => run_rescore(args),
     }
+}
+
+fn run_rescore(args: RescoreArgs) -> Result<()> {
+    if args.threads > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global()
+            .ok();
+    }
+    if args.fasta.is_empty() {
+        return Err(anyhow::anyhow!("rescore: at least one FASTA is required"));
+    }
+    let cfg = kitehor::rescore::Config {
+        samples: args.samples,
+        slop: args.slop,
+        band: args.band,
+        max_n_frac: args.max_n_frac,
+        max_retries: args.max_retries,
+        min_period: args.min_period,
+        max_period: args.max_period,
+        seed: args.seed,
+        top_n: args.top_n,
+        scoring: kitehor::rescore::aligner::ScoringConfig {
+            mismatch_cost: args.mismatch_cost,
+            gap_cost: args.gap_cost,
+        },
+        load_qc: LoadQc {
+            min_array_bp: args.qc.min_array_bp,
+            max_n_fraction: args.qc.max_n_fraction,
+        },
+        force: args.force,
+    };
+    let mut out_path = args.out.as_os_str().to_owned();
+    out_path.push(".peaks.tsv");
+    let out_path = std::path::PathBuf::from(out_path);
+    let n = kitehor::rescore::run_subcommand(&args.fasta, &args.peaks, &out_path, &cfg)?;
+    info!("rescore: processed {} row(s) → {:?}", n, out_path);
+    Ok(())
 }
 
 fn run_report(args: ReportArgs) -> Result<()> {

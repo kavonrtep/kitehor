@@ -84,6 +84,12 @@ pub enum Command {
     /// within a list entry are `:`-separated. No `combined_class`, no
     /// rule_classify verdict — values only.
     Report(ReportArgs),
+    /// Pairwise tile-identity rescoring of kite peaks. Reads a kite
+    /// peaks TSV plus the source FASTA(s); appends `identity_med`,
+    /// `identity_iqr`, `identity_p25`, `identity_n` columns to the
+    /// output. Additive — downstream stages keep using kite's
+    /// `score2_norm`.
+    Rescore(RescoreArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -716,6 +722,89 @@ pub struct ReportArgs {
     /// scan. Below this, irregularity flags `too_short`.
     #[arg(long, default_value_t = 10)]
     pub irreg_min_copies_for_scan: usize,
+    /// Number of rayon worker threads (0 = auto).
+    #[arg(long, default_value_t = 0)]
+    pub threads: usize,
+}
+
+// ---------------------------------------------------------------------------
+// rescore
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct RescoreArgs {
+    /// Input FASTA file(s) — used to look up sequences by case_id.
+    pub fasta: Vec<PathBuf>,
+
+    /// Kite peaks TSV (long format, as produced by `kite-periodicity`).
+    #[arg(long, required = true)]
+    pub peaks: PathBuf,
+
+    /// Output prefix. Writes `<prefix>.peaks.tsv` with appended columns.
+    #[arg(short, long, required = true)]
+    pub out: PathBuf,
+
+    /// Overwrite an existing output file (e.g. when `-o` resolves to
+    /// the same path as `--peaks`). Off by default to prevent
+    /// destructive in-place rewriting of kite's output.
+    #[arg(long)]
+    pub force: bool,
+
+    /// Sampled pairs per (record, period).
+    #[arg(long, default_value_t = 200)]
+    pub samples: usize,
+
+    /// Boundary slop on B in bp (must satisfy `slop ≤ period`).
+    #[arg(long, default_value_t = 10)]
+    pub slop: usize,
+
+    /// Indel-deviation tolerance for the banded edit-distance kernel.
+    /// `0` = auto = `max(20, 2·slop)`, which captures any HOR-tile
+    /// alignment with single-digit net indels.
+    #[arg(long, default_value_t = 0)]
+    pub band: usize,
+
+    /// Reject samples with Ns above this fraction of the pair size.
+    #[arg(long, default_value_t = 0.05)]
+    pub max_n_frac: f64,
+
+    /// Additional draws per slot when an initial draw is rejected.
+    #[arg(long, default_value_t = 3)]
+    pub max_retries: usize,
+
+    /// Skip candidates with period below this; emit NA for those rows.
+    #[arg(long, default_value_t = 20)]
+    pub min_period: usize,
+
+    /// Skip candidates with period above this; emit NA for those rows.
+    /// `0` = unlimited. Cost is `O(period²)` per pair, so the default cap
+    /// keeps long-period peaks from dominating wall time.
+    #[arg(long, default_value_t = 5000)]
+    pub max_period: usize,
+
+    /// Top-level RNG seed (anchor positions derive from `(seed, case_id)`).
+    #[arg(long, default_value_t = 42)]
+    pub seed: u64,
+
+    /// Only rescore the first N peaks per record (rank ≤ N). 0 = all.
+    #[arg(long, default_value_t = 10)]
+    pub top_n: usize,
+
+    /// Per-cell cost of a mismatch in the alignment kernel. Match cost
+    /// is always 0. When set to a value other than 1, `identity_med`
+    /// becomes a weighted identity (still in `[0, 1]` and monotone in
+    /// alignment quality, but no longer equal to the matching fraction).
+    #[arg(long, default_value_t = 1)]
+    pub mismatch_cost: u16,
+
+    /// Per-cell cost of an insertion or deletion. Insertions and
+    /// deletions share this single cost (no affine gaps).
+    #[arg(long, default_value_t = 1)]
+    pub gap_cost: u16,
+
+    #[command(flatten)]
+    pub qc: QcOpts,
+
     /// Number of rayon worker threads (0 = auto).
     #[arg(long, default_value_t = 0)]
     pub threads: usize,

@@ -41,6 +41,7 @@ pub mod synth;
 pub mod analyze;
 pub mod detect;
 pub mod emit_periods;
+pub mod rescore;
 pub mod tandem_validate;
 
 pub use errors::{HordetectError, Result};

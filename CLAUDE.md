@@ -88,6 +88,18 @@ The legacy ML pipeline (RF + Platt + k-recovery + homology) and its
 CLI flags (`--use-ml-classifier`, `--no-hor-call`, `--hor-*`,
 `--coverage`, etc.) were removed in P6 of the rule-proto port.
 
+5. **Kite peaks rescoring** (`docs/rescore.md`):
+   ```
+   kitehor rescore <fasta>... --peaks <kite.peaks.tsv> -o <prefix>
+   ```
+   Appends `identity_med`, `identity_iqr`, `identity_p25`, `identity_n`
+   to a kite peaks TSV. The metric is sampled adjacent-tile pairwise
+   identity (semi-global edit distance, no consensus) — designed to
+   disambiguate HOR-unit from monomer when kite's k-mer score can't
+   separate them. Additive only; downstream stages still drive decisions
+   from `score2_norm`. For large arrays prefer `--top-n` to cap the
+   `O(P²)` per-pair kernel cost on long-period peaks.
+
 ## Repo layout shortcut
 
 ```
@@ -105,6 +117,8 @@ src/                    Rust crate (lib + bin)
   kite.rs               k-mer periodogram (the upstream stage)
   emit_periods.rs       bridge: kite output → v2 detector periods.tsv
   detect/               ← v2 line-width detector (`kitehor detect*`)
+  rescore/              ← sampled pairwise tile-identity rescoring of
+                          kite peaks (`kitehor rescore`)
   simulate*.rs          legacy params.tsv-driven simulator
   synth/                ← v2 YAML-driven simulator (`kitehor synth*`)
   monomer_model.rs      `probe_period` helper (currently unused;
@@ -120,6 +134,7 @@ conda/kitehor/          conda recipe
 .github/workflows/      ci.yml, release.yml, conda-release.yml
 docs/                 project docs
   rule_proto.md       ← the rule-proto pipeline (current default)
+  rescore.md          ← `kitehor rescore` (kite peaks → identity columns)
   rule.md             archived — the older 4-condition rule (P1 retirement)
   release.md          ← tag → release pipeline runbook
   irregularity_and_subrepeat_v0_12.md
