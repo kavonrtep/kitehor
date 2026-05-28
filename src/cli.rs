@@ -858,6 +858,13 @@ pub struct RescoreArgs {
     #[arg(long, default_value_t = 0.50)]
     pub subrepeat_cov_max: f64,
 
+    /// Founder-gate threshold: only rows with `identity_med` at or
+    /// above this value qualify as the per-record founder against
+    /// which subrepeat candidates are gated (subrepeat requires
+    /// `period < founder period`).
+    #[arg(long, default_value_t = 0.70)]
+    pub subrepeat_founder_id_min: f64,
+
     #[command(flatten)]
     pub qc: QcOpts,
 

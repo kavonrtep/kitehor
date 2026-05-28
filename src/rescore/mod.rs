@@ -85,6 +85,10 @@ pub struct SubrepeatConfig {
     /// Subrepeat fires only when `coverage_frac ≤ cov_max`. Excludes
     /// real periods where most pairs hit. Default 0.50.
     pub cov_max: f64,
+    /// Minimum `identity_med` for a row to qualify as the per-record
+    /// founder when applying the founder gate (subrepeat must have
+    /// period < founder period). Default 0.70.
+    pub founder_id_min: f64,
 }
 
 impl Default for SubrepeatConfig {
@@ -96,6 +100,7 @@ impl Default for SubrepeatConfig {
             coverage_threshold: 0.70,
             cov_min: 0.10,
             cov_max: 0.50,
+            founder_id_min: 0.70,
         }
     }
 }
@@ -344,13 +349,14 @@ pub fn run_subcommand(
         cfg.phantom.consistency_min,
     );
     info!(
-        "rescore: subrepeat_flag p75_min={} iqr_min={} med_max={} coverage_threshold={} cov_min={} cov_max={}",
+        "rescore: subrepeat_flag p75_min={} iqr_min={} med_max={} coverage_threshold={} cov_min={} cov_max={} founder_id_min={}",
         cfg.subrepeat.p75_min,
         cfg.subrepeat.iqr_min,
         cfg.subrepeat.med_max,
         cfg.subrepeat.coverage_threshold,
         cfg.subrepeat.cov_min,
         cfg.subrepeat.cov_max,
+        cfg.subrepeat.founder_id_min,
     );
 
     let start = Instant::now();
@@ -358,7 +364,7 @@ pub fn run_subcommand(
     let last_log_sec = AtomicU64::new(0);
     const LOG_INTERVAL_SEC: u64 = 10;
 
-    let stats: Vec<RowStats> = loaded
+    let mut stats: Vec<RowStats> = loaded
         .rows
         .par_iter()
         .map_init(aligner::Scratch::new, |scratch, row| {
@@ -418,6 +424,13 @@ pub fn run_subcommand(
         .collect();
 
     let total_elapsed = start.elapsed();
+
+    // Founder gate: subrepeat must have period < founder period within
+    // the same record. Founder = lowest-rank row with identity_med ≥
+    // subrepeat.founder_id_min AND phantom != true.
+    let founder_overrides =
+        enforce_subrepeat_founder_gate(&loaded.rows, &mut stats, cfg.subrepeat.founder_id_min);
+
     let total_na = stats.iter().filter(|s| s.identity_med.is_none()).count();
     let filtered = n_rows.saturating_sub(n_to_rescore);
     let kernel_na = total_na.saturating_sub(filtered);
@@ -428,12 +441,13 @@ pub fn run_subcommand(
     ns.sort_unstable();
     let med_n = if ns.is_empty() { 0 } else { ns[ns.len() / 2] };
     info!(
-        "rescore: done in {:.1}s — rescored {}, filtered {}, kernel-NA {}, identity_n median={}",
+        "rescore: done in {:.1}s — rescored {}, filtered {}, kernel-NA {}, identity_n median={}, founder-gated {}",
         total_elapsed.as_secs_f64(),
         n_to_rescore.saturating_sub(kernel_na),
         filtered,
         kernel_na,
         med_n,
+        founder_overrides,
     );
 
     let file =
@@ -521,6 +535,54 @@ pub fn rescore_one(
         subrepeat,
         coverage_frac: Some(coverage_frac),
     }
+}
+
+/// Apply the founder gate: for each record, identify the lowest-rank
+/// "founder" row (identity_med ≥ `founder_id_min` AND `phantom != true`)
+/// and override `subrepeat` to `Some(false)` on any row whose period is
+/// not strictly below that founder's period. By construction a subrepeat
+/// is shorter than the founder monomer; this catches the false-positives
+/// we'd otherwise emit on long-period bimodal rows (kite harmonics that
+/// happen to look bimodal across the array).
+///
+/// Returns the number of subrepeat rows that were overridden.
+fn enforce_subrepeat_founder_gate(
+    rows: &[io::RawRow],
+    stats: &mut [RowStats],
+    founder_id_min: f64,
+) -> usize {
+    // First pass: build case_id → (lowest_rank, period) of qualifying founder.
+    let mut founders: AHashMap<&str, (usize, usize)> = AHashMap::new();
+    for (row, stat) in rows.iter().zip(stats.iter()) {
+        let Some(id_med) = stat.identity_med else {
+            continue;
+        };
+        if id_med < founder_id_min || matches!(stat.phantom, Some(true)) {
+            continue;
+        }
+        let entry = founders
+            .entry(row.case_id.as_str())
+            .or_insert((usize::MAX, 0));
+        if row.rank < entry.0 {
+            *entry = (row.rank, row.period);
+        }
+    }
+
+    // Second pass: override subrepeat where the candidate period is not
+    // strictly below the founder.
+    let mut overridden = 0usize;
+    for (row, stat) in rows.iter().zip(stats.iter_mut()) {
+        if !matches!(stat.subrepeat, Some(true)) {
+            continue;
+        }
+        if let Some(&(_, founder_p)) = founders.get(row.case_id.as_str()) {
+            if row.period >= founder_p {
+                stat.subrepeat = Some(false);
+                overridden += 1;
+            }
+        }
+    }
+    overridden
 }
 
 /// Subrepeat heuristic: bimodal identity distribution + intermediate
@@ -671,6 +733,122 @@ mod tests {
         let cfg = SubrepeatConfig::default();
         let r = subrepeat_flag(0.55, 0.40, 0.95, 0.05, Some(false), &cfg);
         assert_eq!(r, Some(false));
+    }
+
+    // --- founder gate ------------------------------------------------------
+
+    fn mk_row(case: &str, rank: usize, period: usize) -> io::RawRow {
+        io::RawRow {
+            line: String::new(),
+            case_id: case.to_string(),
+            rank,
+            period,
+        }
+    }
+
+    fn mk_stats(
+        identity_med: Option<f64>,
+        phantom: Option<bool>,
+        subrepeat: Option<bool>,
+    ) -> RowStats {
+        RowStats {
+            identity_med,
+            identity_iqr: identity_med.map(|_| 0.1),
+            identity_p25: identity_med.map(|v| v - 0.05),
+            identity_n: if identity_med.is_some() { 200 } else { 0 },
+            shift_med: None,
+            shift_consistency: None,
+            phantom,
+            subrepeat,
+            coverage_frac: identity_med.map(|_| 0.3),
+        }
+    }
+
+    #[test]
+    fn founder_gate_overrides_when_period_exceeds_founder() {
+        // TRC_41-style: rank-1 P=470 is the real founder; a later
+        // long-period row was flagged subrepeat=true by the bimodality
+        // heuristic; the founder gate should knock it back to false.
+        let rows = vec![mk_row("TRC_41", 1, 470), mk_row("TRC_41", 4, 3289)];
+        let mut stats = vec![
+            mk_stats(Some(0.94), Some(false), Some(false)),
+            mk_stats(Some(0.66), Some(false), Some(true)),
+        ];
+        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70);
+        assert_eq!(n, 1);
+        assert_eq!(stats[0].subrepeat, Some(false));
+        assert_eq!(stats[1].subrepeat, Some(false)); // overridden
+    }
+
+    #[test]
+    fn founder_gate_keeps_short_subrepeat() {
+        // TRC_104-style: rank-1 P=180 is the founder; rank-2 P=36 is a
+        // genuine subrepeat (period < founder). Flag stays true.
+        let rows = vec![mk_row("TRC_104", 1, 180), mk_row("TRC_104", 2, 36)];
+        let mut stats = vec![
+            mk_stats(Some(0.86), Some(false), Some(false)),
+            mk_stats(Some(0.60), Some(false), Some(true)),
+        ];
+        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70);
+        assert_eq!(n, 0);
+        assert_eq!(stats[1].subrepeat, Some(true));
+    }
+
+    #[test]
+    fn founder_gate_skips_when_no_qualifying_founder() {
+        // No row has identity_med ≥ founder_id_min ⇒ no founder
+        // identified ⇒ subrepeat untouched.
+        let rows = vec![mk_row("CASE_X", 1, 500), mk_row("CASE_X", 2, 40)];
+        let mut stats = vec![
+            mk_stats(Some(0.55), Some(false), Some(false)),
+            mk_stats(Some(0.55), Some(false), Some(true)),
+        ];
+        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70);
+        assert_eq!(n, 0);
+        assert_eq!(stats[1].subrepeat, Some(true));
+    }
+
+    #[test]
+    fn founder_gate_ignores_phantom_when_picking_founder() {
+        // Rank 1 is high-id but phantom-flagged (a sub-period harmonic
+        // that fooled kite); rank 2 is the true founder. The candidate
+        // at rank 3 has period between the phantom's and the founder's
+        // — should be gated against rank 2, not rank 1.
+        let rows = vec![
+            mk_row("CASE_Y", 1, 100), // phantom — ignored as founder
+            mk_row("CASE_Y", 2, 470), // true founder
+            mk_row("CASE_Y", 3, 600), // candidate; would-be subrepeat
+        ];
+        let mut stats = vec![
+            mk_stats(Some(0.90), Some(true), Some(false)),
+            mk_stats(Some(0.90), Some(false), Some(false)),
+            mk_stats(Some(0.55), Some(false), Some(true)),
+        ];
+        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70);
+        // 600 ≥ 470 (founder), so override fires.
+        assert_eq!(n, 1);
+        assert_eq!(stats[2].subrepeat, Some(false));
+    }
+
+    #[test]
+    fn founder_gate_uses_lowest_qualifying_rank_not_earliest_iter() {
+        // Builder order is rank 5 then rank 2; the founder must be the
+        // rank-2 row regardless of iteration order.
+        let rows = vec![
+            mk_row("CASE_Z", 5, 800),
+            mk_row("CASE_Z", 2, 200),
+            mk_row("CASE_Z", 7, 500),
+        ];
+        let mut stats = vec![
+            mk_stats(Some(0.90), Some(false), Some(false)),
+            mk_stats(Some(0.90), Some(false), Some(false)),
+            mk_stats(Some(0.55), Some(false), Some(true)),
+        ];
+        let n = enforce_subrepeat_founder_gate(&rows, &mut stats, 0.70);
+        // Founder is rank-2 with period 200. Candidate is rank-7 at 500.
+        // 500 ≥ 200 ⇒ override.
+        assert_eq!(n, 1);
+        assert_eq!(stats[2].subrepeat, Some(false));
     }
 
     #[test]

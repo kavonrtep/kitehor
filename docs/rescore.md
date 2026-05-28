@@ -66,6 +66,7 @@ kitehor rescore <FASTA>... --peaks <peaks.tsv> -o <prefix>
 | `--coverage-threshold` | `0.70` | per-pair identity that counts as a hit for `coverage_frac` |
 | `--subrepeat-cov-min` | `0.10` | minimum `coverage_frac` for the subrepeat flag |
 | `--subrepeat-cov-max` | `0.50` | maximum `coverage_frac` for the subrepeat flag |
+| `--subrepeat-founder-id-min` | `0.70` | min identity_med for a row to qualify as the per-record founder against which subrepeat candidates are gated |
 | `--min-array-bp` / `--max-n-fraction` | shared QC | inherits from `QcOpts` |
 | `--threads` | `0` (auto) | rayon worker count |
 
@@ -212,7 +213,17 @@ subrepeat = identity_p75   ≥ subrepeat_p75_min       (default 0.70)
         AND coverage_frac  ≥  subrepeat_cov_min      (default 0.10)
         AND coverage_frac  ≤  subrepeat_cov_max      (default 0.50)
         AND phantom        != true
+        AND period         <  founder_period         (founder gate)
 ```
+
+The **founder gate** is enforced as a post-pass: per record, the
+"founder" is the lowest-rank row with `identity_med ≥
+subrepeat_founder_id_min` (default 0.70) and `phantom != true`. Any
+candidate whose period meets or exceeds the founder's period has
+`subrepeat` overridden to `false`. By definition a subrepeat must be
+shorter than the founder monomer; the gate suppresses the false-
+positives we would otherwise emit on long-period harmonics that happen
+to look bimodal across the array.
 
 Real periods (high `identity_med`, narrow IQR, coverage near 1) and
 noise periods (low `identity_p75`, low coverage) both fail at least one

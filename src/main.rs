@@ -74,6 +74,7 @@ fn run_rescore(args: RescoreArgs) -> Result<()> {
             coverage_threshold: args.coverage_threshold,
             cov_min: args.subrepeat_cov_min,
             cov_max: args.subrepeat_cov_max,
+            founder_id_min: args.subrepeat_founder_id_min,
         },
         load_qc: LoadQc {
             min_array_bp: args.qc.min_array_bp,
