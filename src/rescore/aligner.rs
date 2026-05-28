@@ -36,6 +36,27 @@ impl Scratch {
     }
 }
 
+/// Sentinel returned in `BandedResult::j_end` when no in-band alignment
+/// reached row m (e.g. band too tight for the geometry). Callers treat
+/// this as "no shift information available".
+pub const J_END_NONE: u16 = u16::MAX;
+
+/// Result of one banded semi-global alignment call.
+///
+/// `j_end` is the column in `b` where the optimal path exits at row `m`.
+/// For our caller, the *start* column of the alignment in `b` is
+/// approximated as `j_end − m`; this is exact when the alignment has no
+/// net indels and off by at most `band` otherwise. Compared to the
+/// caller's "natural" mapping (`j_start = slop` because `b` is the
+/// adjacent tile extended by ±slop), the shift is
+/// `(j_end − m) − slop = j_end − m − slop` bp — positive when the
+/// alignment landed downstream of the claimed period, negative upstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BandedResult {
+    pub distance: u32,
+    pub j_end: u16,
+}
+
 /// Per-cell costs used by the DP recurrence. Match cost is always 0
 /// (edit-distance convention). Insertions and deletions share a single
 /// gap cost — affine gaps are not modeled.
@@ -86,15 +107,21 @@ pub fn semiglobal_edit_distance_banded(
     band: usize,
     scoring: &ScoringConfig,
     scratch: &mut Scratch,
-) -> u32 {
+) -> BandedResult {
     let m = a.len();
     let n = b.len();
     if m == 0 {
-        return 0;
+        return BandedResult {
+            distance: 0,
+            j_end: 0,
+        };
     }
     if n == 0 {
-        // Must delete all of A.
-        return (m as u32).saturating_mul(scoring.gap_cost as u32);
+        // Must delete all of A; the path exits at column 0.
+        return BandedResult {
+            distance: (m as u32).saturating_mul(scoring.gap_cost as u32),
+            j_end: 0,
+        };
     }
 
     let offset_max = n.saturating_sub(m);
@@ -164,14 +191,28 @@ pub fn semiglobal_edit_distance_banded(
         std::mem::swap(&mut scratch.prev, &mut scratch.curr);
     }
 
-    // Free end: min over D[m][j] for j ∈ [j_lo(m), j_hi(m)] ∩ [0, n].
+    // Free end: argmin over D[m][j] for j ∈ [j_lo(m), j_hi(m)] ∩ [0, n].
     // Result is in `scratch.prev` after the final swap.
     let j_lo = m.saturating_sub(band);
     let j_hi = (m + offset_max + band).min(n);
     if j_lo > j_hi {
-        return inf as u32;
+        return BandedResult {
+            distance: inf as u32,
+            j_end: J_END_NONE,
+        };
     }
-    *scratch.prev[j_lo..=j_hi].iter().min().unwrap_or(&inf) as u32
+    let window = &scratch.prev[j_lo..=j_hi];
+    // Argmin: first occurrence on ties (cheapest path geometrically).
+    let (best_idx, best_val) = window
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, v)| **v)
+        .map(|(i, v)| (i, *v))
+        .unwrap_or((0, inf));
+    BandedResult {
+        distance: best_val as u32,
+        j_end: (j_lo + best_idx) as u16,
+    }
 }
 
 /// Identity ∈ [0, 1] from edit distance and pattern length. Clamped at 0.
@@ -194,12 +235,13 @@ mod tests {
 
     /// Convenience wrapper used by existing functional tests: a band
     /// large enough that the kernel behaves identically to unbanded DP,
-    /// and default unit costs.
+    /// and default unit costs. Returns just the edit distance for
+    /// existing assertions.
     fn dist(a: &[u8], b: &[u8]) -> u32 {
         let band = (a.len() + b.len()).max(64);
         let mut s = Scratch::new();
         let cfg = ScoringConfig::default();
-        semiglobal_edit_distance_banded(a, b, band, &cfg, &mut s)
+        semiglobal_edit_distance_banded(a, b, band, &cfg, &mut s).distance
     }
 
     #[test]
@@ -316,7 +358,7 @@ mod tests {
                 semiglobal_edit_distance_banded(&a, &b, band, &ScoringConfig::default(), &mut s);
             let oracle = dp_reference(&a, &b);
             assert_eq!(
-                banded,
+                banded.distance,
                 oracle,
                 "mismatch a={:?} b={:?}",
                 std::str::from_utf8(&a),
@@ -347,10 +389,10 @@ mod tests {
                     &mut s,
                 );
                 assert!(
-                    banded >= truth,
+                    banded.distance >= truth,
                     "band={} reported {} but true is {} (a={:?}, b={:?})",
                     band,
-                    banded,
+                    banded.distance,
                     truth,
                     std::str::from_utf8(&a),
                     std::str::from_utf8(&b)
@@ -370,9 +412,9 @@ mod tests {
             let banded =
                 semiglobal_edit_distance_banded(a, b, band, &ScoringConfig::default(), &mut s);
             assert_eq!(
-                banded, truth,
+                banded.distance, truth,
                 "band={} truth={} got={}",
-                band, truth, banded
+                band, truth, banded.distance
             );
         }
     }
@@ -386,7 +428,7 @@ mod tests {
         let mut s = Scratch::new();
         let banded_zero =
             semiglobal_edit_distance_banded(a, b, 0, &ScoringConfig::default(), &mut s);
-        assert!(banded_zero >= truth);
+        assert!(banded_zero.distance >= truth);
     }
 
     #[test]
@@ -394,8 +436,13 @@ mod tests {
         let a = b"ACGTACGT";
         let b = b"ACGT";
         let mut s = Scratch::new();
-        let d = semiglobal_edit_distance_banded(a, b, 2, &ScoringConfig::default(), &mut s);
-        assert!(d > a.len() as u32, "expected sentinel, got {}", d);
+        let r = semiglobal_edit_distance_banded(a, b, 2, &ScoringConfig::default(), &mut s);
+        assert!(
+            r.distance > a.len() as u32,
+            "expected sentinel, got {}",
+            r.distance
+        );
+        assert_eq!(r.j_end, J_END_NONE);
     }
 
     #[test]
@@ -457,7 +504,7 @@ mod tests {
             .collect();
 
         // Sequential: fresh Scratch each call.
-        let seq: Vec<u32> = cases
+        let seq: Vec<BandedResult> = cases
             .iter()
             .map(|(a, b, band)| {
                 let mut s = Scratch::new();
@@ -466,7 +513,7 @@ mod tests {
             .collect();
 
         // Parallel: one Scratch per worker via map_init.
-        let par: Vec<u32> = cases
+        let par: Vec<BandedResult> = cases
             .par_iter()
             .map_init(Scratch::new, |scratch, (a, b, band)| {
                 semiglobal_edit_distance_banded(a, b, *band, &ScoringConfig::default(), scratch)
@@ -503,10 +550,10 @@ mod tests {
             },
             &mut s,
         );
-        assert_eq!(d1, 1);
+        assert_eq!(d1.distance, 1);
         // Higher mismatch cost: either pay 3 for the mismatch, or 2 gaps
         // (one in A, one in B) for cost 2. The DP picks the cheaper path.
-        assert_eq!(d3, 2);
+        assert_eq!(d3.distance, 2);
     }
 
     #[test]
@@ -536,10 +583,10 @@ mod tests {
             },
             &mut s,
         );
-        assert_eq!(d1, 1);
+        assert_eq!(d1.distance, 1);
         // With gap_cost=4 and free B-start (offset_max=1), the cheapest
         // alignment is to shift B-start by 1, giving 1 mismatch (cost 1).
-        assert_eq!(d4, 1);
+        assert_eq!(d4.distance, 1);
     }
 
     #[test]
@@ -562,6 +609,99 @@ mod tests {
         );
         // Optimum is the single 1-cost mismatch on the diagonal; no gap
         // is cheaper. Result must be 1, independent of gap_cost.
-        assert_eq!(d, 1);
+        assert_eq!(d.distance, 1);
+    }
+
+    // --- j_end / shift coverage --------------------------------------------
+
+    #[test]
+    fn j_end_on_exact_match_equals_m_plus_offset_max() {
+        // a == b ⇒ optimal path is the diagonal from (0,0) to (m,m).
+        // n == m so offset_max = 0; j_end must be m.
+        let a = b"ACGTACGTAC";
+        let m = a.len();
+        let mut s = Scratch::new();
+        let r = semiglobal_edit_distance_banded(a, a, 16, &ScoringConfig::default(), &mut s);
+        assert_eq!(r.distance, 0);
+        assert_eq!(r.j_end as usize, m);
+    }
+
+    #[test]
+    fn j_end_recovers_shift_when_b_is_shifted() {
+        // Construct a "tile-pair" geometry: a is a clean tile, b is the
+        // adjacent tile with ±slop slack on each side. Shift the "true
+        // tile" inside b by δ bp from the natural mapping.
+        //
+        // Natural mapping: a starts at column `slop` in b, so j_end = m + slop.
+        // Shifted by δ:    a starts at column `slop + δ`, so j_end = m + slop + δ.
+        let m = 50usize;
+        let slop = 10usize;
+        let band = 20usize;
+
+        // Random-but-deterministic 50 bp "tile" content.
+        let tile: Vec<u8> = (0..m).map(|i| b"ACGT"[i % 4]).collect();
+
+        for &delta in &[-6i32, -3, 0, 2, 5] {
+            // Build b of length m + 2·slop, with the tile placed at
+            // position `slop + delta` inside b. Fill the rest with a
+            // distinct base so the kernel can only match the inserted
+            // tile.
+            let mut b = vec![b'N'; m + 2 * slop];
+            let start = (slop as i32 + delta) as usize;
+            b[start..start + m].copy_from_slice(&tile);
+
+            let mut s = Scratch::new();
+            let r =
+                semiglobal_edit_distance_banded(&tile, &b, band, &ScoringConfig::default(), &mut s);
+            // The kernel should find the tile inside b (distance 0) at
+            // exactly column m + slop + delta.
+            assert_eq!(
+                r.distance, 0,
+                "delta={} expected distance 0, got {}",
+                delta, r.distance
+            );
+            let expected_j_end = (m as i32 + slop as i32 + delta) as u16;
+            assert_eq!(
+                r.j_end, expected_j_end,
+                "delta={} expected j_end={}, got {}",
+                delta, expected_j_end, r.j_end
+            );
+        }
+    }
+
+    #[test]
+    fn j_end_is_inside_band_window() {
+        // Property: for any random pair, j_end is inside [j_lo(m), j_hi(m)]
+        // (or J_END_NONE if the band is empty).
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+        let mut rng = StdRng::seed_from_u64(5);
+        let bases = b"ACGT";
+        let mut s = Scratch::new();
+        for _ in 0..100 {
+            let m: usize = rng.random_range(5..30);
+            let n: usize = rng.random_range(m..m + 15);
+            let a: Vec<u8> = (0..m).map(|_| bases[rng.random_range(0..4)]).collect();
+            let b: Vec<u8> = (0..n).map(|_| bases[rng.random_range(0..4)]).collect();
+            let band: usize = rng.random_range(0..15);
+            let r =
+                semiglobal_edit_distance_banded(&a, &b, band, &ScoringConfig::default(), &mut s);
+            if r.j_end == J_END_NONE {
+                continue;
+            }
+            let offset_max = n.saturating_sub(m);
+            let j_lo = m.saturating_sub(band);
+            let j_hi = (m + offset_max + band).min(n);
+            assert!(
+                (r.j_end as usize) >= j_lo && (r.j_end as usize) <= j_hi,
+                "j_end={} outside [{}, {}] (m={}, n={}, band={})",
+                r.j_end,
+                j_lo,
+                j_hi,
+                m,
+                n,
+                band
+            );
+        }
     }
 }

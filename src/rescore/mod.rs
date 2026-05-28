@@ -30,6 +30,36 @@ use std::time::Instant;
 
 pub use sample::SampleConfig;
 
+/// Sub-period phantom-flag thresholds. The flag fires when the per-pair
+/// alignment shift relative to the natural mapping is systematically
+/// non-zero — evidence that the claimed period is a sub-tile of the true
+/// repeat. See `docs/rescore.md` for the worked example.
+#[derive(Debug, Clone, Copy)]
+pub struct PhantomConfig {
+    /// Only include pairs with identity ≥ this threshold in the shift
+    /// aggregate. Below this, the per-pair "best offset" is noise.
+    pub identity_min: f64,
+    /// Minimum number of high-identity pairs required for shift_med to
+    /// be non-NA.
+    pub min_pairs: usize,
+    /// Phantom fires when `|shift_med| / period > tol_frac`.
+    pub tol_frac: f64,
+    /// Phantom fires only when the fraction of pairs whose shift is
+    /// within ±1 bp of `shift_med` exceeds this.
+    pub consistency_min: f64,
+}
+
+impl Default for PhantomConfig {
+    fn default() -> Self {
+        Self {
+            identity_min: 0.5,
+            min_pairs: 5,
+            tol_frac: 0.05,
+            consistency_min: 0.5,
+        }
+    }
+}
+
 /// Rescore stage configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
@@ -49,6 +79,7 @@ pub struct Config {
     /// Per-cell costs used by the alignment kernel. Defaults to unit
     /// edit distance (mismatch=1, gap=1). Match cost is always 0.
     pub scoring: aligner::ScoringConfig,
+    pub phantom: PhantomConfig,
     pub load_qc: LoadQc,
     pub force: bool,
 }
@@ -66,6 +97,7 @@ impl Default for Config {
             seed: 42,
             top_n: 10,
             scoring: aligner::ScoringConfig::default(),
+            phantom: PhantomConfig::default(),
             load_qc: LoadQc::default(),
             force: false,
         }
@@ -102,6 +134,17 @@ pub struct RowStats {
     pub identity_iqr: Option<f64>,
     pub identity_p25: Option<f64>,
     pub identity_n: usize,
+    /// Median shift (in bp) between the optimal alignment offset and the
+    /// natural mapping, aggregated over pairs with identity above
+    /// `PhantomConfig::identity_min`. `None` when fewer than
+    /// `min_pairs` high-identity pairs were available.
+    pub shift_med: Option<i32>,
+    /// Fraction of high-identity pairs whose shift is within ±1 bp of
+    /// `shift_med`. `None` when `shift_med` is `None`.
+    pub shift_consistency: Option<f64>,
+    /// Derived phantom flag — `true` when the candidate period is likely
+    /// a sub-tile of a longer real period (see `PhantomConfig`).
+    pub phantom: Option<bool>,
 }
 
 impl RowStats {
@@ -111,6 +154,9 @@ impl RowStats {
             identity_iqr: None,
             identity_p25: None,
             identity_n: 0,
+            shift_med: None,
+            shift_consistency: None,
+            phantom: None,
         }
     }
 
@@ -119,12 +165,17 @@ impl RowStats {
             o.map(|v| format!("{:.4}", v))
                 .unwrap_or_else(|| "NA".into())
         };
+        let fi = |o: Option<i32>| o.map(|v| v.to_string()).unwrap_or_else(|| "NA".into());
+        let fb = |o: Option<bool>| o.map(|v| v.to_string()).unwrap_or_else(|| "NA".into());
         format!(
-            "{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
             f(self.identity_med),
             f(self.identity_iqr),
             f(self.identity_p25),
-            self.identity_n
+            self.identity_n,
+            fi(self.shift_med),
+            f(self.shift_consistency),
+            fb(self.phantom),
         )
     }
 }
@@ -215,6 +266,13 @@ pub fn run_subcommand(
         cfg.seed,
         threads,
     );
+    info!(
+        "rescore: phantom_flag identity_min={} min_pairs={} tol_frac={} consistency_min={}",
+        cfg.phantom.identity_min,
+        cfg.phantom.min_pairs,
+        cfg.phantom.tol_frac,
+        cfg.phantom.consistency_min,
+    );
 
     let start = Instant::now();
     let processed = AtomicUsize::new(0);
@@ -236,6 +294,7 @@ pub fn run_subcommand(
                         &sample_cfg,
                         band,
                         &cfg.scoring,
+                        &cfg.phantom,
                         scratch,
                     );
                     (r, true)
@@ -301,7 +360,7 @@ pub fn run_subcommand(
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "{}\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n",
+        "{}\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n\tshift_med\tshift_consistency\tphantom",
         loaded.header
     )?;
     for (row, s) in loaded.rows.iter().zip(stats.iter()) {
@@ -312,7 +371,9 @@ pub fn run_subcommand(
     Ok(loaded.rows.len())
 }
 
-/// Compute median/IQR/p25/n for one (record, period) over `cfg.k` pairs.
+/// Compute median/IQR/p25/n + shift_med/consistency/phantom for one
+/// (record, period) over `cfg.k` pairs.
+#[allow(clippy::too_many_arguments)]
 pub fn rescore_one(
     seq: &[u8],
     period: usize,
@@ -320,31 +381,73 @@ pub fn rescore_one(
     cfg: &SampleConfig,
     band: usize,
     scoring: &aligner::ScoringConfig,
+    phantom_cfg: &PhantomConfig,
     scratch: &mut aligner::Scratch,
 ) -> RowStats {
     let pairs = sample::sample_pairs(seq, period, case_id, cfg);
     if pairs.is_empty() {
         return RowStats::na();
     }
-    let mut ids: Vec<f64> = pairs
+
+    // Per-pair: (identity, optional shift). Shift = j_end - period - slop;
+    // the natural mapping has shift = 0.
+    let per_pair: Vec<(f64, Option<i32>)> = pairs
         .iter()
         .map(|p| {
             let a = &seq[p.a_start..p.a_end];
             let b = &seq[p.b_start..p.b_end];
-            let d = aligner::semiglobal_edit_distance_banded(a, b, band, scoring, scratch);
-            aligner::identity_from_distance(d, period)
+            let r = aligner::semiglobal_edit_distance_banded(a, b, band, scoring, scratch);
+            let identity = aligner::identity_from_distance(r.distance, period);
+            let shift = if r.j_end == aligner::J_END_NONE {
+                None
+            } else {
+                Some(r.j_end as i32 - period as i32 - cfg.slop as i32)
+            };
+            (identity, shift)
         })
         .collect();
+
+    // Identity aggregate over all K pairs (unchanged behaviour).
+    let mut ids: Vec<f64> = per_pair.iter().map(|(id, _)| *id).collect();
     ids.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let med = quantile_sorted(&ids, 0.5);
     let p25 = quantile_sorted(&ids, 0.25);
     let p75 = quantile_sorted(&ids, 0.75);
+
+    // Shift aggregate over high-identity pairs only.
+    let (shift_med, shift_consistency, phantom) = aggregate_shifts(&per_pair, period, phantom_cfg);
+
     RowStats {
         identity_med: Some(med),
         identity_iqr: Some((p75 - p25).max(0.0)),
         identity_p25: Some(p25),
         identity_n: ids.len(),
+        shift_med,
+        shift_consistency,
+        phantom,
     }
+}
+
+/// Aggregate per-pair shifts into (shift_med, shift_consistency, phantom).
+fn aggregate_shifts(
+    per_pair: &[(f64, Option<i32>)],
+    period: usize,
+    cfg: &PhantomConfig,
+) -> (Option<i32>, Option<f64>, Option<bool>) {
+    let mut shifts: Vec<i32> = per_pair
+        .iter()
+        .filter_map(|(id, s)| if *id >= cfg.identity_min { *s } else { None })
+        .collect();
+    if shifts.len() < cfg.min_pairs || period == 0 {
+        return (None, None, None);
+    }
+    shifts.sort_unstable();
+    let med = shifts[shifts.len() / 2];
+    let within_1 = shifts.iter().filter(|s| (**s - med).abs() <= 1).count();
+    let consistency = within_1 as f64 / shifts.len() as f64;
+    let frac = (med.unsigned_abs() as f64) / (period as f64);
+    let phantom = frac > cfg.tol_frac && consistency >= cfg.consistency_min;
+    (Some(med), Some(consistency), Some(phantom))
 }
 
 /// Linear-interpolated quantile of a pre-sorted slice. `q ∈ [0, 1]`.
@@ -380,7 +483,7 @@ mod tests {
     #[test]
     fn na_row_formats_as_na() {
         let s = RowStats::na();
-        assert_eq!(s.format_row(), "NA\tNA\tNA\t0");
+        assert_eq!(s.format_row(), "NA\tNA\tNA\t0\tNA\tNA\tNA");
     }
 
     #[test]
@@ -394,6 +497,7 @@ mod tests {
             &SampleConfig::default(),
             20,
             &aligner::ScoringConfig::default(),
+            &PhantomConfig::default(),
             &mut scratch,
         );
         assert!(s.identity_med.is_none());
@@ -422,6 +526,7 @@ mod tests {
             },
             20,
             &aligner::ScoringConfig::default(),
+            &PhantomConfig::default(),
             &mut scratch,
         );
         // Perfect tandem ⇒ identity = 1.0 across all pairs.
@@ -456,5 +561,93 @@ mod tests {
         };
         // Explicit override
         assert_eq!(cfg.resolved_band(), 7);
+    }
+
+    // --- shift aggregation -------------------------------------------------
+
+    fn pp(id: f64, shift: Option<i32>) -> (f64, Option<i32>) {
+        (id, shift)
+    }
+
+    #[test]
+    fn aggregate_shifts_concentrated_nonzero_flags_phantom() {
+        // Mirror the TRC_755 P=56 case: most pairs at +6 shift, some at +5,
+        // a few elsewhere; all have high identity.
+        let mut per_pair = vec![];
+        for _ in 0..150 {
+            per_pair.push(pp(0.85, Some(6)));
+        }
+        for _ in 0..40 {
+            per_pair.push(pp(0.85, Some(5)));
+        }
+        for _ in 0..10 {
+            per_pair.push(pp(0.85, Some(0)));
+        }
+        let (shift, cons, phantom) = aggregate_shifts(&per_pair, 56, &PhantomConfig::default());
+        assert_eq!(shift, Some(6));
+        let cons = cons.unwrap();
+        assert!(cons > 0.9, "expected high consistency, got {}", cons);
+        assert_eq!(phantom, Some(true));
+    }
+
+    #[test]
+    fn aggregate_shifts_concentrated_zero_does_not_flag() {
+        // Real period: shift is sharply at 0.
+        let mut per_pair = vec![];
+        for _ in 0..180 {
+            per_pair.push(pp(0.95, Some(0)));
+        }
+        for _ in 0..20 {
+            per_pair.push(pp(0.95, Some(2)));
+        }
+        let (shift, cons, phantom) = aggregate_shifts(&per_pair, 62, &PhantomConfig::default());
+        assert_eq!(shift, Some(0));
+        assert!(cons.unwrap() > 0.5);
+        assert_eq!(phantom, Some(false));
+    }
+
+    #[test]
+    fn aggregate_shifts_scattered_does_not_flag() {
+        // Non-concentrated shifts ⇒ phantom off even if median is nonzero.
+        let mut per_pair = vec![];
+        for s in -8..=8i32 {
+            for _ in 0..12 {
+                per_pair.push(pp(0.7, Some(s)));
+            }
+        }
+        let (shift, cons, phantom) = aggregate_shifts(&per_pair, 50, &PhantomConfig::default());
+        assert!(shift.is_some());
+        let cons = cons.unwrap();
+        assert!(cons < 0.5, "expected low consistency, got {}", cons);
+        assert_eq!(phantom, Some(false));
+    }
+
+    #[test]
+    fn aggregate_shifts_excludes_low_identity_pairs() {
+        // Most pairs are below threshold; only a handful contribute to
+        // the shift. Below the min_pairs floor → NA.
+        let mut per_pair = vec![];
+        for _ in 0..195 {
+            per_pair.push(pp(0.2, Some(6))); // would have flagged but below threshold
+        }
+        for _ in 0..3 {
+            per_pair.push(pp(0.8, Some(0))); // only 3 pass identity_min
+        }
+        let (shift, cons, phantom) = aggregate_shifts(&per_pair, 56, &PhantomConfig::default());
+        assert_eq!(shift, None);
+        assert_eq!(cons, None);
+        assert_eq!(phantom, None);
+    }
+
+    #[test]
+    fn aggregate_shifts_relative_tol_does_not_flag_large_period() {
+        // |shift|/period below threshold ⇒ no phantom even when concentrated.
+        let mut per_pair = vec![];
+        for _ in 0..200 {
+            per_pair.push(pp(0.9, Some(6))); // |6|/1000 = 0.006 < 0.05
+        }
+        let (shift, _, phantom) = aggregate_shifts(&per_pair, 1000, &PhantomConfig::default());
+        assert_eq!(shift, Some(6));
+        assert_eq!(phantom, Some(false));
     }
 }

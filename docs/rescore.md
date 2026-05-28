@@ -56,6 +56,10 @@ kitehor rescore <FASTA>... --peaks <peaks.tsv> -o <prefix>
 | `--top-n` | `10` | only rescore the first N peaks per record; `0` = all |
 | `--mismatch-cost` | `1` | per-cell cost of a mismatch (match is always 0) |
 | `--gap-cost` | `1` | per-cell cost of an insertion or deletion (no affine gaps; ins == del) |
+| `--shift-identity-min` | `0.5` | pairs below this identity are excluded from the shift aggregate |
+| `--shift-min-pairs` | `5` | minimum high-identity pairs for `shift_med` to be non-NA |
+| `--shift-tol-frac` | `0.05` | `\|shift_med\| / period` threshold for the phantom flag |
+| `--shift-consistency-min` | `0.5` | min fraction of high-identity pairs within ±1 bp of `shift_med` |
 | `--min-array-bp` / `--max-n-fraction` | shared QC | inherits from `QcOpts` |
 | `--threads` | `0` (auto) | rayon worker count |
 
@@ -120,16 +124,58 @@ that slip through.
 
 ## Output schema
 
-`<prefix>.peaks.tsv` is the input file with four columns appended:
+`<prefix>.peaks.tsv` is the input file with seven columns appended:
 
 ```
-identity_med  identity_iqr  identity_p25  identity_n
+identity_med  identity_iqr  identity_p25  identity_n  shift_med  shift_consistency  phantom
 ```
 
 - `identity_med`, `identity_iqr`, `identity_p25` — `%.4f` ∈ [0, 1].
 - `identity_n` — effective sample count after N-rejection.
+- `shift_med` — median alignment shift (bp) over high-identity pairs;
+  positive means the best alignment landed downstream of the natural
+  mapping. `NA` when fewer than `--shift-min-pairs` pairs cleared
+  `--shift-identity-min`.
+- `shift_consistency` — fraction of high-identity pairs with shift
+  within ±1 bp of `shift_med`. `NA` whenever `shift_med` is `NA`.
+- `phantom` — `true` / `false` / `NA`. See "Phantom periods" below.
 - All original cells are passed through **verbatim** (no float
   reformatting), so byte-equality is preserved on the unchanged columns.
+
+## Phantom periods
+
+A "phantom" period is a candidate that scores high on `identity_med`
+purely because the kernel's slop window lets the alignment slide into
+the *real* adjacent tile, even though the claimed period is wrong.
+
+Example from `TRC_755_chr1_426382304_426397308` (IPIP 2026-04-14):
+
+| rank | period | identity_med | shift_med | shift_consistency | phantom |
+|---|---|---|---|---|---|
+| 1 | 62 | 0.871 | 0 | 0.69 | false |
+| 2 | 124 | 0.807 | -1 | 0.59 | false |
+| 4 | **56** | **0.875** | **+6** | **0.67** | **true** |
+
+The array's real periodicity is 62 bp. Kite picks up a low-strength
+echo at P=56; rescore *would* report identity 0.875 for it, but the
+alignment systematically lands 6 bp downstream of the natural mapping
+(`+6 / 56 = 10.7 % > tol_frac = 5 %`, concentration `0.67 > 0.5`).
+The phantom flag fires, and downstream consumers know to treat P=56
+as a sub-tile artifact rather than a genuine periodicity.
+
+The mechanism only catches shifts smaller than `slop`. A claim of P=20
+when the real period is 200 manifests as low identity, not a phantom
+flag — the kernel can't slide that far.
+
+Calibration on the 1600-case `ground_truth_v2` corpus with defaults:
+
+| | |
+|---|---|
+| True HOR-unit rows flagged | 0 / 1313 (0.00 %) |
+| True monomer rows flagged | 8 / 1576 (0.51 %) |
+| Total flagged | 97 / 11387 (0.85 %) |
+
+Zero false positives on the headline target (HOR-unit periods).
 
 ## Performance
 

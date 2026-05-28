@@ -61,6 +61,12 @@ fn run_rescore(args: RescoreArgs) -> Result<()> {
             mismatch_cost: args.mismatch_cost,
             gap_cost: args.gap_cost,
         },
+        phantom: kitehor::rescore::PhantomConfig {
+            identity_min: args.shift_identity_min,
+            min_pairs: args.shift_min_pairs,
+            tol_frac: args.shift_tol_frac,
+            consistency_min: args.shift_consistency_min,
+        },
         load_qc: LoadQc {
             min_array_bp: args.qc.min_array_bp,
             max_n_fraction: args.qc.max_n_fraction,

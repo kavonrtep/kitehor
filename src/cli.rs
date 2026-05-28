@@ -802,6 +802,28 @@ pub struct RescoreArgs {
     #[arg(long, default_value_t = 1)]
     pub gap_cost: u16,
 
+    /// Sub-period phantom flag: only pairs with identity ≥ this are
+    /// included in the alignment-shift aggregate. Below this, the
+    /// per-pair "best offset" is noise.
+    #[arg(long, default_value_t = 0.5)]
+    pub shift_identity_min: f64,
+
+    /// Minimum number of high-identity pairs required for `shift_med`
+    /// to be non-NA.
+    #[arg(long, default_value_t = 5)]
+    pub shift_min_pairs: usize,
+
+    /// Phantom flag relative threshold: fires when
+    /// `|shift_med| / period > shift_tol_frac`.
+    #[arg(long, default_value_t = 0.05)]
+    pub shift_tol_frac: f64,
+
+    /// Phantom flag minimum concentration: fires only when the fraction
+    /// of high-identity pairs whose shift is within ±1 bp of
+    /// `shift_med` is at least this.
+    #[arg(long, default_value_t = 0.5)]
+    pub shift_consistency_min: f64,
+
     #[command(flatten)]
     pub qc: QcOpts,
 
