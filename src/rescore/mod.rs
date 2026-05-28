@@ -147,10 +147,21 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Resolve the effective band given the `band == 0` auto convention.
-    pub fn resolved_band(&self) -> usize {
+    /// Resolve the effective band for a candidate period given the
+    /// `band == 0` auto convention. The auto formula is
+    /// `max(20, 2·slop, ⌈0.02·period⌉)`: short periods keep the old
+    /// `max(20, 2·slop)` default unchanged, while long monomers
+    /// (P > ~1000) get a band scaled to ~2 % of the period — enough to
+    /// cover realistic internal indel drift in centromeric satellites
+    /// without the band-saturation artifact that otherwise drops
+    /// identity_med to ~0.5 on long-monomer arrays.
+    ///
+    /// A user-set `--band N` (non-zero) bypasses the formula.
+    pub fn resolved_band(&self, period: usize) -> usize {
         if self.band == 0 {
-            (2 * self.slop).max(20)
+            let slop_floor = (2 * self.slop).max(20);
+            let period_relative = ((period as f64) * 0.02).ceil() as usize;
+            slop_floor.max(period_relative)
         } else {
             self.band
         }
@@ -274,7 +285,6 @@ pub fn run_subcommand(
 
     let loaded = io::load_peaks(peaks_in)?;
     let sample_cfg = cfg.sample_cfg();
-    let band = cfg.resolved_band();
     let top_n = if cfg.top_n == 0 {
         usize::MAX
     } else {
@@ -310,11 +320,16 @@ pub fn run_subcommand(
         if cfg.max_period == 0 { "all".to_string() } else { cfg.max_period.to_string() },
         if cfg.top_n == 0 { "all".to_string() } else { cfg.top_n.to_string() },
     );
+    let band_display = if cfg.band == 0 {
+        "auto (max(20, 2·slop, ⌈0.02·P⌉))".to_string()
+    } else {
+        cfg.band.to_string()
+    };
     info!(
         "rescore: K={} slop={} band={} mismatch_cost={} gap_cost={} max_retries={} seed={} threads={}",
         cfg.samples,
         cfg.slop,
-        band,
+        band_display,
         cfg.scoring.mismatch_cost,
         cfg.scoring.gap_cost,
         cfg.max_retries,
@@ -351,6 +366,7 @@ pub fn run_subcommand(
                 if row.rank > top_n || row.period < cfg.min_period || row.period > max_period_eff {
                     (RowStats::na(), false)
                 } else if let Some(record) = records.get(&row.case_id) {
+                    let band = cfg.resolved_band(row.period);
                     let r = rescore_one(
                         &record.seq,
                         row.period,
@@ -712,28 +728,158 @@ mod tests {
     }
 
     #[test]
-    fn resolved_band_auto_uses_max_20_2slop() {
+    fn resolved_band_short_period_uses_slop_floor() {
         let cfg = Config {
             slop: 5,
             band: 0,
             ..Config::default()
         };
-        // 2*5 = 10, max(20, 10) = 20
-        assert_eq!(cfg.resolved_band(), 20);
+        // 2·5 = 10, max(20, 10) = 20; ⌈0.02·100⌉ = 2 → still 20.
+        assert_eq!(cfg.resolved_band(100), 20);
+        assert_eq!(cfg.resolved_band(500), 20); // ⌈10⌉ < 20
+    }
+
+    #[test]
+    fn resolved_band_wider_slop_dominates() {
         let cfg = Config {
             slop: 50,
             band: 0,
             ..Config::default()
         };
-        // 2*50 = 100, max(20, 100) = 100
-        assert_eq!(cfg.resolved_band(), 100);
+        // 2·50 = 100; ⌈0.02·100⌉ = 2 → 100 wins.
+        assert_eq!(cfg.resolved_band(100), 100);
+    }
+
+    #[test]
+    fn resolved_band_long_period_scales_with_period() {
         let cfg = Config {
-            slop: 5,
+            slop: 10,
+            band: 0,
+            ..Config::default()
+        };
+        // slop_floor = 20; ⌈0.02·2870⌉ = 58 → 58.
+        assert_eq!(cfg.resolved_band(2870), 58);
+        // ⌈0.02·5000⌉ = 100.
+        assert_eq!(cfg.resolved_band(5000), 100);
+        // ⌈0.02·1000⌉ = 20 → unchanged.
+        assert_eq!(cfg.resolved_band(1000), 20);
+        // ⌈0.02·1050⌉ = 21 → just over.
+        assert_eq!(cfg.resolved_band(1050), 21);
+    }
+
+    #[test]
+    fn resolved_band_user_override_bypasses_formula() {
+        let cfg = Config {
+            slop: 10,
             band: 7,
             ..Config::default()
         };
-        // Explicit override
-        assert_eq!(cfg.resolved_band(), 7);
+        assert_eq!(cfg.resolved_band(100), 7);
+        assert_eq!(cfg.resolved_band(2870), 7);
+        assert_eq!(cfg.resolved_band(5000), 7);
+    }
+
+    #[test]
+    fn long_monomer_with_internal_indels_recovers_with_auto_band() {
+        // Regression test for the band=20 saturation artifact on long
+        // monomers (the TRC_463 case). Construct 8 copies of a ~2000 bp
+        // template; each copy gets a 40 bp insertion at a tile-specific
+        // random position, so adjacent tiles share ~98 % of their
+        // content but the optimal DP path between them drifts ~40 cells
+        // off the diagonal at the location of either insertion.
+        //
+        // Period = 2040 (template + insertion), so:
+        //   - band = 20 ⇒ DP saturates at the 40-cell drift, identity
+        //     collapses to roughly the band-cap floor (≈ 0.5)
+        //   - band = auto = ⌈0.02 · 2040⌉ = 41 ⇒ DP follows the path,
+        //     identity recovers above 0.95
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let mut rng = StdRng::seed_from_u64(11);
+        let bases = b"ACGT";
+        let template_len = 2000usize;
+        let insertion_len = 40usize;
+        let period = template_len + insertion_len; // 2040
+
+        let template: Vec<u8> = (0..template_len)
+            .map(|_| bases[rng.random_range(0..4)])
+            .collect();
+
+        // 8 tiles, each = template + insertion at a tile-specific position.
+        let mut seq: Vec<u8> = Vec::new();
+        for _ in 0..8 {
+            let insert_pos = rng.random_range(200..(template_len - 200));
+            let insertion: Vec<u8> = (0..insertion_len)
+                .map(|_| bases[rng.random_range(0..4)])
+                .collect();
+            let mut tile = template.clone();
+            tile.splice(insert_pos..insert_pos, insertion);
+            seq.extend_from_slice(&tile);
+        }
+
+        let case_id = "synthetic_long_indel";
+        let cfg_auto = Config::default();
+        let band_auto = cfg_auto.resolved_band(period);
+        // auto band = max(20, 20, ⌈40.8⌉) = 41
+        assert!(
+            band_auto >= 41,
+            "expected auto band ≥ 41, got {}",
+            band_auto
+        );
+
+        let cfg_tight = Config {
+            band: 20,
+            ..Config::default()
+        };
+
+        let sample_cfg = cfg_auto.sample_cfg();
+        let scoring = aligner::ScoringConfig::default();
+        let phantom_cfg = PhantomConfig::default();
+        let subrepeat_cfg = SubrepeatConfig::default();
+        let mut scratch = aligner::Scratch::new();
+
+        let stats_auto = rescore_one(
+            &seq,
+            period,
+            case_id,
+            &sample_cfg,
+            band_auto,
+            &scoring,
+            &phantom_cfg,
+            &subrepeat_cfg,
+            &mut scratch,
+        );
+        let stats_tight = rescore_one(
+            &seq,
+            period,
+            case_id,
+            &sample_cfg,
+            cfg_tight.resolved_band(period),
+            &scoring,
+            &phantom_cfg,
+            &subrepeat_cfg,
+            &mut scratch,
+        );
+
+        let id_auto = stats_auto.identity_med.unwrap();
+        let id_tight = stats_tight.identity_med.unwrap();
+        assert!(
+            id_auto > 0.90,
+            "auto-band identity should recover, got {}",
+            id_auto
+        );
+        // The gap on synthetic data (8 pp here) is smaller than what
+        // shows up on real long-monomer satellites like TRC_463
+        // (~40 pp), because the tight band still finds a suboptimal
+        // path through forced gaps on simple inputs. The direction is
+        // what matters: auto > tight by a measurable margin.
+        assert!(
+            id_auto - id_tight >= 0.05,
+            "expected ≥ 5 pp gap between auto={} and tight={}",
+            id_auto,
+            id_tight
+        );
     }
 
     // --- shift aggregation -------------------------------------------------

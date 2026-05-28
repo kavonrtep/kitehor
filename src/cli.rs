@@ -759,8 +759,11 @@ pub struct RescoreArgs {
     pub slop: usize,
 
     /// Indel-deviation tolerance for the banded edit-distance kernel.
-    /// `0` = auto = `max(20, 2·slop)`, which captures any HOR-tile
-    /// alignment with single-digit net indels.
+    /// `0` = auto = `max(20, 2·slop, ⌈0.02·period⌉)`. Short periods
+    /// stay at the slop floor; long monomers (P > ~1000) get a band
+    /// scaled to ~2 % of the period so DP saturation doesn't crush
+    /// identity on satellites with realistic indel rates. Pass a
+    /// non-zero value to override the formula.
     #[arg(long, default_value_t = 0)]
     pub band: usize,
 

@@ -47,7 +47,7 @@ kitehor rescore <FASTA>... --peaks <peaks.tsv> -o <prefix>
 |---|---|---|
 | `--samples K` | `200` | sampled pairs per (record, period); linear cost |
 | `--slop` | `10` | bp of slack on the B-tile to absorb tile-boundary indels; must satisfy `slop ≤ period` |
-| `--band` | `0` (auto) | indel-deviation tolerance for the banded kernel; auto resolves to `max(20, 2·slop)` |
+| `--band` | `0` (auto) | indel-deviation tolerance for the banded kernel; auto = `max(20, 2·slop, ⌈0.02·P⌉)` |
 | `--max-n-frac` | `0.05` | skip pairs whose combined N fraction exceeds this |
 | `--max-retries` | `3` | extra draws per slot when an initial draw is N-rejected |
 | `--min-period` | `20` | skip candidates below this; emit NA for those rows |
@@ -247,18 +247,24 @@ faster than plain DP on long-period candidates). Cost scales linearly in
 `K`, in candidate period `P`, and in `band`. The default `max-period=5000`
 cap and `top-n=10` together keep the long-period tail bounded.
 
+The auto-band formula `max(20, 2·slop, ⌈0.02·P⌉)` widens the band on
+long monomers so DP saturation doesn't artificially crush identity in
+satellites with realistic internal indel rates (≈ 1 %). Cost scales
+linearly with the band, so long-period peaks cost ~3× more than under
+a fixed `band = 20`.
+
 Indicative wall times (1600-case `ground_truth_v2/` corpus, K=200, defaults,
 16 cores):
 
 | stage | time |
 |---|---|
 | `kite-periodicity` (input) | ~35 s |
-| `rescore` (banded DP, Tier 1) | ~30–60 s |
+| `rescore` (banded DP, auto-band) | ~70 s |
 
-For users who need the unbounded scan, set `--max-period 0`. The
-`O(P · band)` cost makes this affordable at the price of ~10× wall time.
-A banded Myers bitvector kernel (`O(P · band / 64)`) is the natural next
-step if even the bounded run becomes the bottleneck.
+On the IPIP 2026-04-14 corpus (3024 records, 305 MB, K=200, defaults):
+~17 s kite + ~180 s rescore. The `O(P · band)` cost dominates on the
+long-period tail; for cases where the user knows they don't need
+wide-band recovery, passing `--band 20` halves the rescore time.
 
 ## Calibration
 
