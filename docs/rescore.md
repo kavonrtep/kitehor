@@ -63,6 +63,9 @@ kitehor rescore <FASTA>... --peaks <peaks.tsv> -o <prefix>
 | `--subrepeat-p75-min` | `0.70` | minimum identity_p75 for the subrepeat flag |
 | `--subrepeat-iqr-min` | `0.15` | minimum identity_iqr (bimodal-spread gate) |
 | `--subrepeat-med-max` | `0.70` | maximum identity_med (separates from real periods) |
+| `--coverage-threshold` | `0.70` | per-pair identity that counts as a hit for `coverage_frac` |
+| `--subrepeat-cov-min` | `0.10` | minimum `coverage_frac` for the subrepeat flag |
+| `--subrepeat-cov-max` | `0.50` | maximum `coverage_frac` for the subrepeat flag |
 | `--min-array-bp` / `--max-n-fraction` | shared QC | inherits from `QcOpts` |
 | `--threads` | `0` (auto) | rayon worker count |
 
@@ -127,10 +130,10 @@ that slip through.
 
 ## Output schema
 
-`<prefix>.peaks.tsv` is the input file with eight columns appended:
+`<prefix>.peaks.tsv` is the input file with nine columns appended:
 
 ```
-identity_med  identity_iqr  identity_p25  identity_n  shift_med  shift_consistency  phantom  subrepeat
+identity_med  identity_iqr  identity_p25  identity_n  shift_med  shift_consistency  phantom  subrepeat  coverage_frac
 ```
 
 - `identity_med`, `identity_iqr`, `identity_p25` — `%.4f` ∈ [0, 1].
@@ -144,6 +147,10 @@ identity_med  identity_iqr  identity_p25  identity_n  shift_med  shift_consisten
 - `phantom` — `true` / `false` / `NA`. See "Phantom periods" below.
 - `subrepeat` — `true` / `false` / `NA`. See "Subrepeat flag" below. Always
   `false` (never `true`) on rows where `phantom = true`.
+- `coverage_frac` — `%.4f` ∈ [0, 1]. Fraction of pairs whose identity
+  reached `--coverage-threshold`. Independent diagnostic of "how much of
+  the array this period actually tiles". Real periods sit near 1.0,
+  noise near 0, subrepeats in the middle band.
 - All original cells are passed through **verbatim** (no float
   reformatting), so byte-equality is preserved on the unchanged columns.
 
@@ -194,29 +201,35 @@ and score near 1.0, the rest land outside and score near random.
 
 ### Mechanism
 
-A bimodal distribution produces a wide IQR with a high `identity_p75`
-and a moderate `identity_med`. The flag combines those gates:
+A bimodal distribution produces a wide IQR with a high `identity_p75`,
+a moderate `identity_med`, and a `coverage_frac` between the noise floor
+and the real-period ceiling:
 
 ```
-subrepeat = identity_p75 ≥ subrepeat_p75_min        (default 0.70)
-        AND identity_iqr  ≥ subrepeat_iqr_min        (default 0.15)
-        AND identity_med  < subrepeat_med_max        (default 0.70)
-        AND phantom      != true
+subrepeat = identity_p75   ≥ subrepeat_p75_min       (default 0.70)
+        AND identity_iqr   ≥ subrepeat_iqr_min       (default 0.15)
+        AND identity_med   <  subrepeat_med_max      (default 0.70)
+        AND coverage_frac  ≥  subrepeat_cov_min      (default 0.10)
+        AND coverage_frac  ≤  subrepeat_cov_max      (default 0.50)
+        AND phantom        != true
 ```
 
-Real periods (high `identity_med`, narrow IQR) and noise periods (low
-`identity_p75`, narrow IQR) both fail at least one gate. Phantom-flagged
-rows are excluded so the two boolean columns are mutually exclusive on
-true cases.
+Real periods (high `identity_med`, narrow IQR, coverage near 1) and
+noise periods (low `identity_p75`, low coverage) both fail at least one
+gate. Phantom-flagged rows are excluded so the two boolean columns are
+mutually exclusive on true cases.
 
 ### Detection floor
 
-At default `--samples 200` and `--subrepeat-p75-min 0.70`, the
-`identity_p75` gate requires the top 25 % of sampled pairs to score
-above the threshold. That puts the practical detection floor at a
-**subrepeat footprint of ≈ 25 %** of the array. Smaller footprints
-(< 25 %) are missed by this heuristic; for those, raise `--samples` or
-wait for the upcoming `coverage_frac` column.
+Each of the two width-related gates (`identity_p75` ≥ 0.70 *and*
+`coverage_frac` ≥ 0.10) caps the practical floor:
+
+- `identity_p75` ≥ 0.70 implicitly requires the top 25 % of sampled
+  pairs to score high, but only because IQR semantics demand a fixed
+  quartile. With **K = 200 the floor is `coverage_frac` ≈ 0.10
+  (≈ 20 hits)**.
+- For a smaller footprint (< 5 %), raise `--samples` to keep the
+  expected hit count above the noise.
 
 ### Example (IPIP 2026-04-14)
 

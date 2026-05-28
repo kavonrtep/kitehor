@@ -71,6 +71,9 @@ fn run_rescore(args: RescoreArgs) -> Result<()> {
             p75_min: args.subrepeat_p75_min,
             iqr_min: args.subrepeat_iqr_min,
             med_max: args.subrepeat_med_max,
+            coverage_threshold: args.coverage_threshold,
+            cov_min: args.subrepeat_cov_min,
+            cov_max: args.subrepeat_cov_max,
         },
         load_qc: LoadQc {
             min_array_bp: args.qc.min_array_bp,

@@ -839,6 +839,22 @@ pub struct RescoreArgs {
     #[arg(long, default_value_t = 0.70)]
     pub subrepeat_med_max: f64,
 
+    /// Per-pair identity threshold for the `coverage_frac` column:
+    /// pairs at or above this count as "hits" when computing the
+    /// fraction of array the candidate period appears to tile.
+    #[arg(long, default_value_t = 0.70)]
+    pub coverage_threshold: f64,
+
+    /// Subrepeat flag minimum coverage_frac — excludes noise periods
+    /// where almost no pairs hit at all.
+    #[arg(long, default_value_t = 0.10)]
+    pub subrepeat_cov_min: f64,
+
+    /// Subrepeat flag maximum coverage_frac — excludes real periods
+    /// where most pairs hit.
+    #[arg(long, default_value_t = 0.50)]
+    pub subrepeat_cov_max: f64,
+
     #[command(flatten)]
     pub qc: QcOpts,
 

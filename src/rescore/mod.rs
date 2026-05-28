@@ -76,6 +76,15 @@ pub struct SubrepeatConfig {
     /// the bimodal case from a real period that happens to have a wide
     /// IQR.
     pub med_max: f64,
+    /// Per-pair identity threshold for the `coverage_frac` column —
+    /// pairs at or above this count as "hits". Default 0.70.
+    pub coverage_threshold: f64,
+    /// Subrepeat fires only when `coverage_frac ≥ cov_min`. Excludes
+    /// noise periods where no pairs actually hit. Default 0.10.
+    pub cov_min: f64,
+    /// Subrepeat fires only when `coverage_frac ≤ cov_max`. Excludes
+    /// real periods where most pairs hit. Default 0.50.
+    pub cov_max: f64,
 }
 
 impl Default for SubrepeatConfig {
@@ -84,6 +93,9 @@ impl Default for SubrepeatConfig {
             p75_min: 0.70,
             iqr_min: 0.15,
             med_max: 0.70,
+            coverage_threshold: 0.70,
+            cov_min: 0.10,
+            cov_max: 0.50,
         }
     }
 }
@@ -180,6 +192,10 @@ pub struct RowStats {
     /// array (typically within the founder monomer). Always `false`
     /// when `phantom == Some(true)`.
     pub subrepeat: Option<bool>,
+    /// Fraction of pairs with identity at or above
+    /// `SubrepeatConfig::coverage_threshold`. Independent diagnostic of
+    /// what fraction of the array the candidate period actually tiles.
+    pub coverage_frac: Option<f64>,
 }
 
 impl RowStats {
@@ -193,6 +209,7 @@ impl RowStats {
             shift_consistency: None,
             phantom: None,
             subrepeat: None,
+            coverage_frac: None,
         }
     }
 
@@ -204,7 +221,7 @@ impl RowStats {
         let fi = |o: Option<i32>| o.map(|v| v.to_string()).unwrap_or_else(|| "NA".into());
         let fb = |o: Option<bool>| o.map(|v| v.to_string()).unwrap_or_else(|| "NA".into());
         format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             f(self.identity_med),
             f(self.identity_iqr),
             f(self.identity_p25),
@@ -213,6 +230,7 @@ impl RowStats {
             f(self.shift_consistency),
             fb(self.phantom),
             fb(self.subrepeat),
+            f(self.coverage_frac),
         )
     }
 }
@@ -311,8 +329,13 @@ pub fn run_subcommand(
         cfg.phantom.consistency_min,
     );
     info!(
-        "rescore: subrepeat_flag p75_min={} iqr_min={} med_max={}",
-        cfg.subrepeat.p75_min, cfg.subrepeat.iqr_min, cfg.subrepeat.med_max,
+        "rescore: subrepeat_flag p75_min={} iqr_min={} med_max={} coverage_threshold={} cov_min={} cov_max={}",
+        cfg.subrepeat.p75_min,
+        cfg.subrepeat.iqr_min,
+        cfg.subrepeat.med_max,
+        cfg.subrepeat.coverage_threshold,
+        cfg.subrepeat.cov_min,
+        cfg.subrepeat.cov_max,
     );
 
     let start = Instant::now();
@@ -402,7 +425,7 @@ pub fn run_subcommand(
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "{}\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n\tshift_med\tshift_consistency\tphantom\tsubrepeat",
+        "{}\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n\tshift_med\tshift_consistency\tphantom\tsubrepeat\tcoverage_frac",
         loaded.header
     )?;
     for (row, s) in loaded.rows.iter().zip(stats.iter()) {
@@ -461,7 +484,15 @@ pub fn rescore_one(
     let (shift_med, shift_consistency, phantom) = aggregate_shifts(&per_pair, period, phantom_cfg);
 
     let iqr = (p75 - p25).max(0.0);
-    let subrepeat = subrepeat_flag(med, iqr, p75, phantom, subrepeat_cfg);
+    let coverage_frac = if ids.is_empty() {
+        0.0
+    } else {
+        ids.iter()
+            .filter(|x| **x >= subrepeat_cfg.coverage_threshold)
+            .count() as f64
+            / ids.len() as f64
+    };
+    let subrepeat = subrepeat_flag(med, iqr, p75, coverage_frac, phantom, subrepeat_cfg);
 
     RowStats {
         identity_med: Some(med),
@@ -472,22 +503,30 @@ pub fn rescore_one(
         shift_consistency,
         phantom,
         subrepeat,
+        coverage_frac: Some(coverage_frac),
     }
 }
 
-/// Subrepeat heuristic: bimodal identity distribution + not phantom +
-/// not a real period.
+/// Subrepeat heuristic: bimodal identity distribution + intermediate
+/// coverage + not phantom + not a real period.
 fn subrepeat_flag(
     med: f64,
     iqr: f64,
     p75: f64,
+    coverage_frac: f64,
     phantom: Option<bool>,
     cfg: &SubrepeatConfig,
 ) -> Option<bool> {
     if matches!(phantom, Some(true)) {
         return Some(false);
     }
-    Some(p75 >= cfg.p75_min && iqr >= cfg.iqr_min && med < cfg.med_max)
+    Some(
+        p75 >= cfg.p75_min
+            && iqr >= cfg.iqr_min
+            && med < cfg.med_max
+            && coverage_frac >= cfg.cov_min
+            && coverage_frac <= cfg.cov_max,
+    )
 }
 
 /// Aggregate per-pair shifts into (shift_med, shift_consistency, phantom).
@@ -545,16 +584,17 @@ mod tests {
     #[test]
     fn na_row_formats_as_na() {
         let s = RowStats::na();
-        assert_eq!(s.format_row(), "NA\tNA\tNA\t0\tNA\tNA\tNA\tNA");
+        assert_eq!(s.format_row(), "NA\tNA\tNA\t0\tNA\tNA\tNA\tNA\tNA");
     }
 
     // --- subrepeat heuristic -----------------------------------------------
 
     #[test]
     fn subrepeat_flag_classic_bimodal_fires() {
-        // Wide IQR + moderate median + high p75, not phantom.
+        // Wide IQR + moderate median + high p75 + intermediate coverage,
+        // not phantom.
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.55, 0.40, 0.95, Some(false), &cfg);
+        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.30, Some(false), &cfg);
         assert_eq!(r, Some(true));
     }
 
@@ -562,7 +602,7 @@ mod tests {
     fn subrepeat_flag_phantom_blocks_subrepeat() {
         // Same bimodal stats but the row is already a phantom: never flag.
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.55, 0.40, 0.95, Some(true), &cfg);
+        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.30, Some(true), &cfg);
         assert_eq!(r, Some(false));
     }
 
@@ -570,7 +610,7 @@ mod tests {
     fn subrepeat_flag_real_period_does_not_fire() {
         // High median ⇒ real period; med_max gate blocks subrepeat.
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.95, 0.05, 0.97, Some(false), &cfg);
+        let r = subrepeat_flag(0.95, 0.05, 0.97, 0.95, Some(false), &cfg);
         assert_eq!(r, Some(false));
     }
 
@@ -578,7 +618,7 @@ mod tests {
     fn subrepeat_flag_noise_does_not_fire() {
         // Uniformly low identity, narrow IQR ⇒ noise; p75/iqr gates block.
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.42, 0.07, 0.46, Some(false), &cfg);
+        let r = subrepeat_flag(0.42, 0.07, 0.46, 0.0, Some(false), &cfg);
         assert_eq!(r, Some(false));
     }
 
@@ -586,17 +626,35 @@ mod tests {
     fn subrepeat_flag_high_iqr_low_p75_does_not_fire() {
         // Wide IQR but the top isn't high enough — p75_min gate blocks.
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.40, 0.25, 0.62, Some(false), &cfg);
+        let r = subrepeat_flag(0.40, 0.25, 0.62, 0.10, Some(false), &cfg);
         assert_eq!(r, Some(false));
     }
 
     #[test]
     fn subrepeat_flag_phantom_unknown_does_not_block() {
         // phantom = None ⇒ no phantom info, but the row passes the
-        // bimodality gates: still fire.
+        // bimodality + coverage gates: still fire.
         let cfg = SubrepeatConfig::default();
-        let r = subrepeat_flag(0.55, 0.40, 0.95, None, &cfg);
+        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.30, None, &cfg);
         assert_eq!(r, Some(true));
+    }
+
+    #[test]
+    fn subrepeat_flag_too_high_coverage_does_not_fire() {
+        // Bimodality gates pass but coverage > cov_max ⇒ real period
+        // (coverage_frac too high), not a subrepeat.
+        let cfg = SubrepeatConfig::default();
+        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.80, Some(false), &cfg);
+        assert_eq!(r, Some(false));
+    }
+
+    #[test]
+    fn subrepeat_flag_too_low_coverage_does_not_fire() {
+        // Bimodality gates pass but coverage < cov_min ⇒ too few hits
+        // for a real subrepeat (noise-leaning).
+        let cfg = SubrepeatConfig::default();
+        let r = subrepeat_flag(0.55, 0.40, 0.95, 0.05, Some(false), &cfg);
+        assert_eq!(r, Some(false));
     }
 
     #[test]
