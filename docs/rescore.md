@@ -19,9 +19,85 @@ column that downstream analysis can consult independently.
 > for a side-by-side view of `rescore` and `report`. This document is
 > the per-flag reference.
 
+## Reading a rescore row — quick interpretation
+
+A rescore row carries three independent signals on the same
+`(record, period)` candidate:
+
+1. **Pairwise alignment** — `identity_med`, `identity_iqr`,
+   `identity_p25`, `coverage_frac`, `spatial_contrast`. Measures
+   "what does this period look like under banded edit-distance
+   alignment of adjacent tile pairs?"
+2. **K-mer-positional structure** — `kmer_autocorr_founder`,
+   `kmer_phase_contrast`. Folds the k-mer pair midpoints by the
+   founder cycle to ask "is the period-P signal phase-locked to
+   the founder?"
+3. **Per-base shifted-self-alignment scan** — `scan_n_intervals`,
+   `scan_occupancy_frac`. The strictest of the three: a per-base
+   match indicator at lag `period`, smoothed and thresholded.
+   See [Shifted self-alignment scan](#shifted-self-alignment-scan).
+
+The `phantom` and `subrepeat` booleans summarise the first family
+(alignment) plus the founder-gate post-pass. The k-mer and scan
+columns are **observational** in v0.12 — they don't flip the
+existing booleans, but you can use them to triage borderline rows.
+
+### "Is this row a real nested subrepeat?"
+
+| signal | strong "yes" | strong "no" | notes |
+|---|---|---|---|
+| `subrepeat` | `true` | `false` | summarises the alignment-based gates |
+| `scan_occupancy_frac` (P < founder/4) | > 0.15 | < 0.05 | strictest — no alignment slop |
+| `scan_n_intervals` (same) | tens+ | 0 | small number = single localised region |
+| `kmer_autocorr_founder` | > 0.4 | < 0 | jitter-tolerant on long arrays |
+| `kmer_phase_contrast` | > 0.10 | ≈ 0 | jitter-tolerant on short arrays |
+| `founder_period` | known | `NA` | no founder ⇒ the booleans + scan are the only reliable signal |
+
+The four diagnostic columns (autoF + phaseC + scan_n + scan_occ)
+**agree on real subrepeats** (TRC_104, TRC_666, TRC_79, TRC_84
+showed at least 3 of 4 elevated). When they disagree with
+`subrepeat=true`, suspect a rescore over-flag — especially when
+`founder_period = NA` (TRC_14-class).
+
+### "Is this a phantom (sub-period harmonic)?"
+
+| signal | "yes" | notes |
+|---|---|---|
+| `phantom` | `true` | derived from shift_med + shift_consistency |
+| `shift_med` | non-zero, with high `shift_consistency` | the kernel slid into a neighbouring tile |
+| `scan_occupancy_frac` | typically low | the candidate isn't actually a real period |
+
+### "Is this a clean array-wide periodicity?"
+
+When the row's period is the founder / HOR-unit:
+
+| signal | "yes" | notes |
+|---|---|---|
+| `identity_med` | ≥ 0.85 | high alignment identity at adjacent tiles |
+| `coverage_frac` | ≈ 1.0 | almost all sampled pairs hit |
+| `scan_occupancy_frac` | 0.7–1.0 | clean tandem; 0.3–0.7 indicates boundary jitter |
+| `subrepeat` | `false` | by construction (period ≥ founder doesn't qualify) |
+
+### Quick decision rule
+
+```
+if subrepeat = true AND scan_occupancy_frac > 0.10:
+    high-confidence nested subrepeat
+elif subrepeat = true AND scan_occupancy_frac ≈ 0:
+    rescore likely over-flagged; check founder_period (often NA)
+elif subrepeat = false AND scan_occupancy_frac > 0.20 AND period < founder/4:
+    real nested subrepeat that the alignment-based gates missed
+elif phantom = true:
+    sub-period harmonic; not a real period
+elif identity_med > 0.85 AND coverage_frac > 0.9:
+    real array-wide period (founder / HOR-unit / harmonic)
+else:
+    noise / weak signal
+```
+
 ## Status
 
-Stable. Seven feature drops:
+Stable. Ten feature drops:
 
 1. **Tier 1** — banded DP kernel, `u16` cells, scratch reuse, runtime
    logging, CLI defaults (`--top-n 10`, `--max-period 5000`).
@@ -59,11 +135,29 @@ Stable. Seven feature drops:
    founder P=2018, ratio 0.97). Applied only when the per-record
    founder is known; rows in records with no qualifying founder are
    unaffected.
+9. **K-mer-positional diagnostics** — `kmer_autocorr_founder` and
+   `kmer_phase_contrast` columns (cols 12, 13). Both fold the
+   per-record k-mer pair midpoint list by the founder cycle and
+   ask whether the period-P signal is phase-locked to the founder.
+   Observational — do not gate the `subrepeat` flag in this
+   release. On the IPIP 2026-04-14 corpus, 94 % of 53 currently-
+   flagged subrepeats with known founder have at least one of
+   `autoF ≥ 0.4` OR `phaseC ≥ 0.10` elevated.
+10. **Shifted self-alignment scan (Step E)** — `scan_n_intervals`
+    and `scan_occupancy_frac` columns (cols 14, 15). For every
+    `(record, period)` row, computes the windowed match rate at
+    lag `period` via cumulative-sum convolution, finds contiguous
+    runs above `--scan-id-threshold` (default 0.55) of length
+    ≥ `(min_copies − 1) · period` indices, and reports
+    `n_intervals` + `occupancy_frac`. Observational; the strictest
+    per-base discriminator. Validated visually via the regime
+    gallery below + 30-record dotplot panel (`tools/subrepeat_scan/
+    render_candidates.py`).
 
-72 unit tests + 2 integration tests cover the kernel, sampler,
-aggregators, and end-to-end behaviour. The two derived flags are
-**mutually exclusive** by construction (the founder gate / phantom
-priority enforces it).
+93 unit tests + 2 integration tests cover the kernel, sampler,
+aggregators, scan, and end-to-end behaviour. The two derived
+flags (`phantom`, `subrepeat`) are **mutually exclusive** by
+construction (the founder gate / phantom priority enforces it).
 
 ## Why rescore exists
 
@@ -188,10 +282,10 @@ that slip through.
 
 ## Output schema
 
-`<prefix>.peaks.tsv` is the input file with **eleven columns appended**:
+`<prefix>.peaks.tsv` is the input file with **fifteen columns appended**:
 
 ```
-identity_med  identity_iqr  identity_p25  identity_n  shift_med  shift_consistency  phantom  subrepeat  coverage_frac  spatial_contrast  founder_period
+identity_med  identity_iqr  identity_p25  identity_n  shift_med  shift_consistency  phantom  subrepeat  coverage_frac  spatial_contrast  founder_period  kmer_autocorr_founder  kmer_phase_contrast  scan_n_intervals  scan_occupancy_frac
 ```
 
 - `identity_med`, `identity_iqr`, `identity_p25` — `%.4f` ∈ [0, 1].

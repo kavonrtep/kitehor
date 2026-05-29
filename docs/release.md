@@ -239,10 +239,47 @@ What it ships:
   - `README.md` subcommand table updated to link every reference
 - **schema(summary.tsv)**: gains `subrepeat_coverage_pct` (column
   32). Column count: 32 → 33. Existing column indices unchanged.
-- **schema(rescore peaks TSV)**: 9 appended columns → **13**
+- **schema(rescore peaks TSV)**: 9 appended columns → **15**
   (adds `spatial_contrast`, `founder_period`,
-  `kmer_autocorr_founder`, `kmer_phase_contrast`). Existing
-  column indices unchanged.
+  `kmer_autocorr_founder`, `kmer_phase_contrast`,
+  `scan_n_intervals`, `scan_occupancy_frac`). Existing column
+  indices unchanged.
+- **feat(rescore) — shifted-self-alignment scan**: new
+  `src/rescore/scan.rs` module emits `scan_n_intervals` +
+  `scan_occupancy_frac` for every kite-reported `(record,
+  period)` row. Per-base match indicator at lag `period`,
+  cumulative-sum windowed mean, contiguous runs above
+  `--scan-id-threshold` (default 0.55) of length
+  ≥ `(min_copies − 1) · period` indices. Strictest per-base
+  discriminator: no alignment slop, so it cleanly rejects
+  near-founder false positives (TRC_115 P=1955 → 0) and exposes
+  rescore's over-flagging on records without an identified
+  founder (TRC_14 P=163: `subrepeat=true` but `scan_occupancy_frac
+  = 0`). Observational in this release — does not gate the
+  `subrepeat` flag (deferred to a follow-up after labelled-data
+  calibration). O(L) per row; +5 s on top of the existing ~165 s
+  rescore on IPIP. 14 new unit tests.
+- **tools(scan)**: `tools/subrepeat_scan/scan.py` (Python
+  prototype kept for cross-checking), `tools/subrepeat_scan/
+  dotplot.py` (k-mer self-self dotplot renderer; NumPy + PIL,
+  no matplotlib dep), and
+  `tools/subrepeat_scan/render_candidates.py` (selects
+  putative-subrepeat candidates from a rescore TSV and renders
+  one PNG per candidate via `dottir batch`). Renders 30 IPIP
+  candidates in ~3 s.
+- **docs(rescore)** —
+  [`docs/rescore.md`](rescore.md) reorganised: top-of-doc
+  "Reading a rescore row" interpretation guide answering "is this
+  a real subrepeat?" / "phantom?" / "clean periodicity?" with a
+  one-screen decision rule. Full per-column reference for all
+  15 appended columns. Per-period-regime interpretation for the
+  scan. Visual regime gallery — 4 canonical-pattern PNGs under
+  `docs/images/scan_regimes/` — anchored to the IPIP spot-checks
+  (TRC_104, TRC_115, TRC_666, TRC_16).
+- **docs(new)**:
+  [`docs/new/scan_port_plan.md`](new/scan_port_plan.md) — the
+  implementation contract for the scan port, kept for future
+  maintainers + the deferred gating-promotion decision.
 
 Non-breaking notes for operators:
 
@@ -260,7 +297,7 @@ Non-breaking notes for operators:
   via `--subrepeat-density-min 0` to restore v0.11 behaviour.
 
 Pre-flight passed:
-- 420 unit + integration tests pass, 1 ignored
+- 434 unit + integration tests pass, 1 ignored
   (`tandem_validate_python_parity`, opt-in;
   `cargo test --release --locked`).
 - `cargo clippy --release --all-targets --locked --no-deps -- -D warnings` clean.
