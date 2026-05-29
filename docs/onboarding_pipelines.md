@@ -60,7 +60,7 @@ tile pairs to get a nucleotide-level identity per peak, then derives two
 boolean flags (`phantom`, `subrepeat`) from the per-pair distribution and
 alignment-shift statistics.
 
-The output is the input peaks TSV with **13 columns appended**. Nothing
+The output is the input peaks TSV with **15 columns appended**. Nothing
 upstream is mutated. The metric is additive — downstream stages
 (rule-classify, analyze) still drive decisions from kite's `score2_norm`.
 
@@ -73,7 +73,7 @@ upstream is mutated. The metric is additive — downstream stages
 
 ### Output schema (full reference)
 
-`<prefix>.peaks.tsv` is the input file with 13 columns appended:
+`<prefix>.peaks.tsv` is the input file with 15 columns appended:
 
 | # | column | type | meaning |
 |---|---|---|---|
@@ -90,6 +90,8 @@ upstream is mutated. The metric is additive — downstream stages
 | 11 | `founder_period` | int (bp) | per-record founder period used by the founder gate (same value across all rows of one record); `NA` when no row met `identity_med ≥ founder_id_min` and `phantom != true` |
 | 12 | `kmer_autocorr_founder` | float | Pearson autocorrelation of the period-P k-mer pair density profile at lag = `founder_period`. Range `[−1, +1]`. High when density(x) oscillates with the founder period (real nested subrepeat). **Observational** — does not gate the `subrepeat` flag. `NA` when founder unknown |
 | 13 | `kmer_phase_contrast` | float | Max-contiguous-half-fraction excess of midpoints folded by `(mid mod founder_period)` into 12 phase bins. Range `[0, 0.5]`. High when midpoints prefer one half of the founder cycle (TRC_104-style). **Observational** — does not gate the `subrepeat` flag. `NA` when founder unknown |
+| 14 | `scan_n_intervals` | int | Number of contiguous tandem-positive runs the shifted-self-alignment scan found at this row's period. **Observational** — does not gate the `subrepeat` flag. `NA` when the scan didn't run |
+| 15 | `scan_occupancy_frac` | float | Fraction of the array occupied by tandem-positive runs at this row's period (∈ [0, 1]). High at short periods = real nested subrepeat; high at long periods = clean array-wide tandem. **Observational** — does not gate the `subrepeat` flag |
 
 `NA` cells in any of the additive columns indicate either kite-filtered
 rows (rank/period out of range or record missing from FASTA) or

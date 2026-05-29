@@ -4,11 +4,12 @@
 each candidate period it samples adjacent tile pairs from the array and
 computes their median pairwise identity, alignment shift, two derived
 flags, and a spatial-coherence statistic for the high-identity hits.
-The output is kite's peaks TSV with **13 appended columns**:
+The output is kite's peaks TSV with **15 appended columns**:
 `identity_med`, `identity_iqr`, `identity_p25`, `identity_n`,
 `shift_med`, `shift_consistency`, `phantom`, `subrepeat`,
 `coverage_frac`, `spatial_contrast`, `founder_period`,
-`kmer_autocorr_founder`, `kmer_phase_contrast`.
+`kmer_autocorr_founder`, `kmer_phase_contrast`,
+`scan_n_intervals`, `scan_occupancy_frac`.
 
 The metric is **additive only**. Downstream stages (rule-classify,
 analyze) still decide on kite's `score2_norm`; rescore is a diagnostic
@@ -240,8 +241,92 @@ identity_med  identity_iqr  identity_p25  identity_n  shift_med  shift_consisten
   evidence (subrepeat occupies one contiguous portion of each
   founder copy). Jitter-tolerant on short arrays; smears toward
   zero on very long arrays. `NA` when founder unknown.
+- `scan_n_intervals` — int / `NA`. **Observational** — does not
+  gate the `subrepeat` flag. Number of contiguous tandem-positive
+  runs found at this row's period by the shifted-self-alignment
+  scan (see [Shifted self-alignment scan](#shifted-self-alignment-scan)
+  below). `0` means the scan ran but found no qualifying run.
+  `NA` means the scan did not run (disabled via `--no-scan` or
+  array too short).
+- `scan_occupancy_frac` — `%.4f` ∈ [0, 1] / `NA`.
+  **Observational** — does not gate the `subrepeat` flag.
+  Fraction of the array occupied by tandem-positive runs at this
+  row's period — `occupied_bp / array_length`. High at long
+  periods (the founder / HOR-unit scale) confirms array-wide
+  tandem structure; intermediate at short periods (subrepeat
+  scale) is evidence of a real nested tandem.
 - All original cells are passed through **verbatim** (no float
   reformatting), so byte-equality is preserved on the unchanged columns.
+
+## Shifted self-alignment scan
+
+For every kite-reported `(record, period)` row, `rescore` computes
+a per-base shifted match indicator
+`match[i] = 1 if seq[i] == seq[i+period] else 0`, smooths it via a
+period-wide forward window (the mean over `match[i..i+period]`),
+and reports contiguous runs above an identity threshold. A run of
+window-indices of length `r` corresponds to a sequence interval of
+length `r + period` bp.
+
+**CLI knobs:**
+
+| flag | default | meaning |
+|---|---|---|
+| `--scan-id-threshold` | `0.55` | min per-window match rate to qualify a window; lower admits more divergent tandems, higher rejects noise |
+| `--scan-min-copies` | `3` | minimum tandem copies; min qualifying run length is `(min_copies − 1) · period` indices |
+| `--no-scan` | (enabled) | disable; both scan columns emit `NA` for every row |
+
+**Interpretation by period regime:**
+
+- **Short period (≈ kite-reported subrepeat scale, ~20–60 bp):**
+  - `scan_occupancy_frac` 0.05–0.20: nested subrepeat exists in
+    some founder copies only (TRC_104-class pattern).
+  - 0.20–0.60: nested subrepeat in most founders (TRC_666-class).
+  - ≥ 0.60: strongly recurring at this period — confirm it isn't
+    a sub-multiple of the founder.
+  - 0.00 with `scan_n_intervals = 0`: no contiguous tandem run
+    met the threshold; strong evidence against a real nested
+    subrepeat at this period.
+- **Long period (≈ founder / HOR-unit scale):**
+  - High `scan_occupancy_frac` (~0.9–1.0): clean tandem at this
+    period — the candidate IS a real array-wide periodicity.
+  - Moderate `scan_occupancy_frac` (0.3–0.7): array is tandem at
+    this period but has substantial boundary jitter / indels
+    breaking the per-base match. **Important caveat:** the scan
+    has no alignment slop, so even ±1 bp of drift between
+    founder copies locally drops the per-window rate below
+    threshold. Real centromeric tandems with indel drift will
+    show this pattern.
+  - Low `scan_occupancy_frac` (~0): candidate period is not
+    actually a periodicity of the array at the strict per-base
+    level — corroborates that this is a near-founder / harmonic
+    artifact.
+
+**Calibration on IPIP 2026-04-14** (3024 records, 21,685 rescored,
+default thresholds):
+
+| | count | % of rescored |
+|---|---:|---:|
+| `scan_occupancy_frac > 0.05` | 5,883 | 27.1 % |
+| `scan_occupancy_frac > 0.15` | 4,868 | 22.4 % |
+| `scan_occupancy_frac > 0.50` | 2,474 | 11.4 % |
+| `scan_occupancy_frac > 0.95` | 413 | 1.9 % |
+
+Per-record wall-time impact: ~5 s on top of the existing
+~165 s rescore time on IPIP (`O(L)` per row, cumulative-sum
+trick).
+
+**Canonical IPIP spot-checks:**
+
+| record | period | scan_n_intervals | scan_occupancy_frac | what it means |
+|---|---|---|---|---|
+| TRC_104:chr3_411509737 | 36 (subrepeat) | 50 | 0.44 | real nested subrepeat — many short tandem runs along the array |
+| TRC_104 | 180 (founder) | 2 | 0.08 | array-wide tandem with substantial boundary drift |
+| TRC_115:chr7_353599568 | 1955 (FP) | 0 | 0.00 | not a real period — scan confirms |
+| TRC_115 | 2018 (founder) | 8 | 0.63 | tandem with moderate jitter |
+| TRC_666:chr4_523278767 | 36 (subrepeat) | 150 | 0.46 | real high-divergence nested subrepeat |
+| TRC_666 | 250 (founder) | 2 | 0.99 | clean array-wide tandem |
+| TRC_14:chr1_315645785 | 163 | 0 | 0.00 | rescore `subrepeat=true` but no real tandem at this period — likely false positive |
 
 ## Interpreting `kmer_autocorr_founder` + `kmer_phase_contrast`
 

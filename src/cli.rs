@@ -902,6 +902,27 @@ pub struct RescoreArgs {
     #[arg(long, default_value_t = 20)]
     pub kmer_spatial_min_total_pairs: usize,
 
+    /// Minimum windowed match rate for a window to qualify as
+    /// tandem evidence at the row's period in the shifted-self-
+    /// alignment scan (see `docs/rescore.md`). Default 0.55,
+    /// calibrated to admit real subrepeats at ~12 pct per-copy
+    /// divergence while rejecting pure noise.
+    #[arg(long, default_value_t = 0.55)]
+    pub scan_id_threshold: f64,
+
+    /// Minimum number of tandem copies required for a positive
+    /// shifted-self-alignment call. Translates to a minimum
+    /// qualifying-window run of (min_copies − 1) · period
+    /// indices. Default 3.
+    #[arg(long, default_value_t = 3)]
+    pub scan_min_copies: usize,
+
+    /// Disable the shifted-self-alignment scan. Both
+    /// `scan_n_intervals` and `scan_occupancy_frac` columns will
+    /// emit `NA` for every row.
+    #[arg(long, default_value_t = false)]
+    pub no_scan: bool,
+
     #[command(flatten)]
     pub qc: QcOpts,
 

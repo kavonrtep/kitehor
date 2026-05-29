@@ -84,6 +84,11 @@ fn run_rescore(args: RescoreArgs) -> Result<()> {
             n_bins: 12,
             min_total_pairs: args.kmer_spatial_min_total_pairs,
         },
+        scan: kitehor::rescore::ScanConfig {
+            id_threshold: args.scan_id_threshold,
+            min_copies: args.scan_min_copies,
+            enabled: !args.no_scan,
+        },
         load_qc: LoadQc {
             min_array_bp: args.qc.min_array_bp,
             max_n_fraction: args.qc.max_n_fraction,

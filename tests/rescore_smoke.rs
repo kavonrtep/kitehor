@@ -111,12 +111,12 @@ fn rescore_pipeline_appends_columns_and_separates_hor_from_monomer() {
 
     assert!(rescore_out.exists());
 
-    // Header check: must end with the thirteen appended columns.
+    // Header check: must end with the fifteen appended columns.
     let content = std::fs::read_to_string(&rescore_out).unwrap();
     let header = content.lines().next().unwrap();
     assert!(
         header.ends_with(
-            "\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n\tshift_med\tshift_consistency\tphantom\tsubrepeat\tcoverage_frac\tspatial_contrast\tfounder_period\tkmer_autocorr_founder\tkmer_phase_contrast"
+            "\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n\tshift_med\tshift_consistency\tphantom\tsubrepeat\tcoverage_frac\tspatial_contrast\tfounder_period\tkmer_autocorr_founder\tkmer_phase_contrast\tscan_n_intervals\tscan_occupancy_frac"
         ),
         "unexpected header: {}",
         header

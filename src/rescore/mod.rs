@@ -17,6 +17,7 @@ pub mod aligner;
 pub mod io;
 pub mod kmer_scan;
 pub mod sample;
+pub mod scan;
 
 use crate::io::{load_fasta, LoadQc, LoadStatus};
 use crate::sequence::ArrayRecord;
@@ -151,6 +152,40 @@ impl Default for KmerSpatialConfig {
     }
 }
 
+/// Per-stage configuration for the shifted-self-alignment scan
+/// ([`scan::scan_one_period`]). Runs on every kite-reported
+/// `(record, period)` row that rescore is already processing — no
+/// separate period filter — and emits two TSV columns:
+/// `scan_n_intervals` and `scan_occupancy_frac`.
+#[derive(Debug, Clone, Copy)]
+pub struct ScanConfig {
+    /// Minimum windowed match rate for a window-start index to
+    /// qualify as "tandem evidence" at the row's period. Default
+    /// 0.55 — calibrated on the synthetic subrepeat corpus + IPIP
+    /// TRC_666 to admit real subrepeats at ~ 12 % per-copy
+    /// divergence while rejecting pure noise (match ≈ 0.25).
+    pub id_threshold: f64,
+    /// Minimum number of tandem copies required for a positive
+    /// call. Translates to a minimum qualifying-window run of
+    /// `(min_copies − 1) · period` indices. Default 3 — matches
+    /// the biological definition of a "nested short tandem".
+    pub min_copies: usize,
+    /// Skip the scan entirely when `false`; both `scan_*` columns
+    /// emit `NA` for every row. Default `true`. CLI: `--no-scan`
+    /// flips this off.
+    pub enabled: bool,
+}
+
+impl Default for ScanConfig {
+    fn default() -> Self {
+        Self {
+            id_threshold: 0.55,
+            min_copies: 3,
+            enabled: true,
+        }
+    }
+}
+
 /// Number of equal-width anchor-offset bins used by the
 /// `spatial_contrast` statistic. Fixed at 10 to mirror
 /// `tandem-validate`'s position binning convention.
@@ -202,6 +237,7 @@ pub struct Config {
     pub phantom: PhantomConfig,
     pub subrepeat: SubrepeatConfig,
     pub kmer_spatial: KmerSpatialConfig,
+    pub scan: ScanConfig,
     pub load_qc: LoadQc,
     pub force: bool,
 }
@@ -222,6 +258,7 @@ impl Default for Config {
             phantom: PhantomConfig::default(),
             subrepeat: SubrepeatConfig::default(),
             kmer_spatial: KmerSpatialConfig::default(),
+            scan: ScanConfig::default(),
             load_qc: LoadQc::default(),
             force: false,
         }
@@ -324,6 +361,17 @@ pub struct RowStats {
     /// [`kmer_scan::kmer_phase_folded_contrast`]. **Observational
     /// only** in this release.
     pub kmer_phase_contrast: Option<f64>,
+    /// Number of contiguous tandem-positive runs found at this
+    /// row's period by [`scan::scan_one_period`]. `None` when the
+    /// scan is disabled, the row was filtered before rescoring, or
+    /// the array is too short to host any qualifying run.
+    /// **Observational only** — does not gate the `subrepeat` flag.
+    pub scan_n_intervals: Option<usize>,
+    /// Fraction of the array occupied by tandem-positive runs at
+    /// this row's period — `occupied_bp / array_length` ∈ [0, 1].
+    /// `None` under the same conditions as `scan_n_intervals`.
+    /// **Observational only** — does not gate the `subrepeat` flag.
+    pub scan_occupancy_frac: Option<f64>,
 }
 
 impl RowStats {
@@ -342,6 +390,8 @@ impl RowStats {
             founder_period: None,
             kmer_autocorr_founder: None,
             kmer_phase_contrast: None,
+            scan_n_intervals: None,
+            scan_occupancy_frac: None,
         }
     }
 
@@ -354,7 +404,7 @@ impl RowStats {
         let fu = |o: Option<usize>| o.map(|v| v.to_string()).unwrap_or_else(|| "NA".into());
         let fb = |o: Option<bool>| o.map(|v| v.to_string()).unwrap_or_else(|| "NA".into());
         format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             f(self.identity_med),
             f(self.identity_iqr),
             f(self.identity_p25),
@@ -368,6 +418,8 @@ impl RowStats {
             fu(self.founder_period),
             f(self.kmer_autocorr_founder),
             f(self.kmer_phase_contrast),
+            fu(self.scan_n_intervals),
+            f(self.scan_occupancy_frac),
         )
     }
 }
@@ -512,6 +564,12 @@ pub fn run_subcommand(
             ""
         },
     );
+    info!(
+        "rescore: scan id_threshold={} min_copies={}{}",
+        cfg.scan.id_threshold,
+        cfg.scan.min_copies,
+        if cfg.scan.enabled { "" } else { " (disabled)" },
+    );
 
     let start = Instant::now();
     let processed = AtomicUsize::new(0);
@@ -527,7 +585,7 @@ pub fn run_subcommand(
                     (RowStats::na(), false)
                 } else if let Some(record) = records.get(&row.case_id) {
                     let band = cfg.resolved_band(row.period);
-                    let r = rescore_one(
+                    let mut r = rescore_one(
                         &record.seq,
                         row.period,
                         &row.case_id,
@@ -538,6 +596,17 @@ pub fn run_subcommand(
                         &cfg.subrepeat,
                         scratch,
                     );
+                    if cfg.scan.enabled {
+                        if let Some(sr) = scan::scan_one_period(
+                            &record.seq,
+                            row.period,
+                            cfg.scan.id_threshold,
+                            cfg.scan.min_copies,
+                        ) {
+                            r.scan_n_intervals = Some(sr.n_intervals);
+                            r.scan_occupancy_frac = Some(sr.occupancy_frac);
+                        }
+                    }
                     (r, true)
                 } else {
                     (RowStats::na(), false)
@@ -652,7 +721,7 @@ pub fn run_subcommand(
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "{}\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n\tshift_med\tshift_consistency\tphantom\tsubrepeat\tcoverage_frac\tspatial_contrast\tfounder_period\tkmer_autocorr_founder\tkmer_phase_contrast",
+        "{}\tidentity_med\tidentity_iqr\tidentity_p25\tidentity_n\tshift_med\tshift_consistency\tphantom\tsubrepeat\tcoverage_frac\tspatial_contrast\tfounder_period\tkmer_autocorr_founder\tkmer_phase_contrast\tscan_n_intervals\tscan_occupancy_frac",
         loaded.header
     )?;
     for (row, s) in loaded.rows.iter().zip(stats.iter()) {
@@ -759,6 +828,8 @@ pub fn rescore_one(
         founder_period: None,
         kmer_autocorr_founder: None,
         kmer_phase_contrast: None,
+        scan_n_intervals: None,
+        scan_occupancy_frac: None,
     }
 }
 
@@ -994,7 +1065,7 @@ mod tests {
         let s = RowStats::na();
         assert_eq!(
             s.format_row(),
-            "NA\tNA\tNA\t0\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA"
+            "NA\tNA\tNA\t0\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA"
         );
     }
 
@@ -1124,6 +1195,8 @@ mod tests {
             founder_period: None,
             kmer_autocorr_founder: None,
             kmer_phase_contrast: None,
+            scan_n_intervals: None,
+            scan_occupancy_frac: None,
         }
     }
 
